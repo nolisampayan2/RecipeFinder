@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="RecipeFinder — a frontend recipe discovery prototype.">
+  <title>RecipeFinder — Discover your next favorite</title>
+  <link rel="preconnect" href="https://images.unsplash.com">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to recipes</a>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="#home" aria-label="RecipeFinder home">
+        <span class="brand-mark" aria-hidden="true">♨</span>
+        <span><strong>Recipe<span>Finder</span></strong><small>Discover · Cook · Enjoy</small></span>
+      </a>
+      <nav class="main-nav" id="main-nav">
+        <a class="nav-link active" href="#home" data-section="home"><span>⌂</span>Home</a>
+        <a class="nav-link" href="#recommended" data-section="recommended"><span>⌕</span>Explore</a>
+        <a class="nav-link" href="#categories" data-section="categories"><span>▦</span>Categories</a>
+        <a class="nav-link" href="#cuisines" data-section="cuisines"><span>◎</span>Cuisines</a>
+        <a class="nav-link" href="#favorites" data-section="favorites"><span>♡</span>My Favorites <b id="fav-count">0</b></a>
+      </nav>
+      <div class="sidebar-rule"></div>
+      <section class="quick-filters" aria-labelledby="quick-title">
+        <p id="quick-title">Quick filters</p>
+        <button data-filter="Chicken">🍗 <span>Chicken</span></button>
+        <button data-filter="Vegetarian">🥬 <span>Vegetarian</span></button>
+        <button data-filter="Seafood">🐟 <span>Seafood</span></button>
+        <button data-filter="Pasta">🍝 <span>Pasta</span></button>
+        <button data-filter="Dessert">🧁 <span>Dessert</span></button>
+      </section>
+      <article class="sidebar-promo">
+        <span>✦</span><h2>Discover<br>new flavors</h2>
+        <p>Simple ideas for memorable meals.</p>
+        <button data-scroll="recommended">Explore now →</button>
+      </article>
+    </aside>
+
+    <div class="page">
+      <header class="topbar">
+        <button class="mobile-menu" id="menu-btn" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false">☰</button>
+        <form class="search" id="search-form" role="search">
+          <span aria-hidden="true">⌕</span>
+          <label class="sr-only" for="search-input">Search recipes</label>
+          <input id="search-input" type="search" autocomplete="off" placeholder="Search recipes, ingredients, or cuisines…">
+          <button type="submit">Search</button>
+        </form>
+        <button class="theme-toggle" id="theme-toggle" aria-label="Switch to dark mode" title="Toggle theme"><span>☀</span><i></i><span>☾</span></button>
+        <div class="guest"><span>👩🏽‍🍳</span><strong>Guest</strong></div>
+      </header>
+
+      <main id="main-content">
+        <section class="hero" id="home" aria-labelledby="hero-title">
+          <div class="hero-copy">
+            <span class="eyebrow">FRESH INSPIRATION</span>
+            <h1 id="hero-title">A healthier,<br><em>happier you.</em></h1>
+            <p>Discover delicious meals from around the world. Search, explore, and save your favorites.</p>
+            <div class="hero-actions">
+              <button class="primary" data-scroll="recommended">Explore recipes <span>→</span></button>
+              <button class="secondary surprise-btn">⤨ Surprise me</button>
+            </div>
+          </div>
+          <div class="hero-image" role="img" aria-label="Colorful grilled chicken and avocado bowl"></div>
+          <span class="hero-note" aria-hidden="true">Good food,<br>good mood!</span>
+        </section>
+
+        <section class="content-section" id="categories" aria-labelledby="categories-title">
+          <div class="section-heading"><h2 id="categories-title">🔥 Popular categories</h2><button class="text-button" data-clear>View all →</button></div>
+          <div class="category-row" id="category-row"></div>
+        </section>
+
+        <section class="content-section" id="recommended" aria-labelledby="recommended-title">
+          <div class="section-heading"><h2 id="recommended-title">🍴 Recommended for you</h2><button class="text-button" data-clear>View all →</button></div>
+          <div class="recipe-grid featured-grid" id="recommended-grid"></div>
+        </section>
+
+        <section class="content-section" aria-labelledby="more-title">
+          <div class="section-heading"><h2 id="more-title">🕘 More recipes to explore</h2><button class="text-button" data-clear>View all →</button></div>
+          <div class="recipe-grid compact-grid" id="more-grid"></div>
+          <div class="empty-state" id="empty-state" hidden><span>🥣</span><h3>No recipes found</h3><p>Try another search or clear your filters.</p><button class="primary" data-clear>Clear filters</button></div>
+        </section>
+      </main>
+      <footer><p>RecipeFinder visual prototype · Sample recipe data only</p><p>Food photos: <a href="https://unsplash.com" target="_blank" rel="noreferrer">Unsplash</a> contributors · Hero image generated for this prototype</p></footer>
+    </div>
+
+    <aside class="rightbar" aria-label="Recipe highlights">
+      <section class="side-card" id="favorites">
+        <div class="side-heading"><h2>💗 Saved recipes</h2><button class="text-button" data-section-link="favorites">View all →</button></div>
+        <div id="favorite-list" class="favorite-list"></div>
+      </section>
+      <section class="random-card">
+        <span class="sparkle">✦</span><h2>🎲 Random recipe</h2><p>Not sure what to cook? Let us pick something delicious.</p><button class="surprise-btn">⤨ Surprise me</button>
+      </section>
+      <section class="side-card" id="cuisines">
+        <div class="side-heading"><h2>🌐 Popular cuisines</h2><button class="text-button" data-clear>View all →</button></div>
+        <div class="cuisine-list" id="cuisine-list"></div>
+      </section>
+      <section class="quote-card"><span>💡</span><h2>Cooking inspiration</h2><blockquote>“Good food is all the sweeter when shared with good friends.”</blockquote></section>
+    </aside>
+  </div>
+
+  <div class="modal" id="recipe-modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <article class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <button class="modal-close" data-close aria-label="Close recipe details">×</button>
+      <div id="modal-content"></div>
+    </article>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
