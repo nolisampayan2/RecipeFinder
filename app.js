@@ -1,39 +1,181 @@
-const recipes = [
-  {id:'creamy-garlic-pasta',name:'Creamy Garlic Pasta',category:'Pasta',cuisine:'Italian',image:'https://images.unsplash.com/photo-1473093295043-cdd812d0e601?auto=format&fit=crop&w=900&q=82',description:'Silky pasta tossed with roasted garlic, herbs, and parmesan.',ingredients:[['Fettuccine','300 g'],['Garlic','5 cloves'],['Cooking cream','1 cup'],['Parmesan','¾ cup'],['Parsley','2 tbsp']],instructions:'Boil the pasta until al dente.\nGently cook minced garlic in olive oil. Add cream and simmer for 3 minutes.\nToss in pasta and parmesan, season, then finish with parsley.',tutorial:'https://www.youtube.com/results?search_query=creamy+garlic+pasta+recipe'},
-  {id:'lemon-chicken',name:'Grilled Lemon Chicken',category:'Chicken',cuisine:'American',image:'https://images.unsplash.com/photo-1532550907401-a500c9a57435?auto=format&fit=crop&w=900&q=82',description:'Juicy grilled chicken with bright lemon, garlic, and garden herbs.',ingredients:[['Chicken breasts','4'],['Lemon','2'],['Garlic','3 cloves'],['Olive oil','3 tbsp'],['Fresh thyme','1 tbsp']],instructions:'Whisk lemon juice, garlic, oil, thyme, salt, and pepper.\nMarinate chicken for 30 minutes.\nGrill for 6–7 minutes per side until cooked through, then rest before slicing.'},
-  {id:'beef-stew',name:'Hearty Beef Stew',category:'Beef',cuisine:'British',image:'https://images.unsplash.com/photo-1608500218807-4e9d4fc9c15b?auto=format&fit=crop&w=900&q=82',description:'A slow-simmered classic with tender beef and root vegetables.',ingredients:[['Beef chuck','700 g'],['Potatoes','3'],['Carrots','3'],['Beef stock','4 cups'],['Tomato paste','2 tbsp']],instructions:'Brown the beef in batches.\nSoften vegetables, stir in tomato paste, then return the beef.\nAdd stock and simmer covered for 90 minutes until tender.'},
-  {id:'fish-tacos',name:'Crispy Fish Tacos',category:'Seafood',cuisine:'Mexican',image:'https://images.unsplash.com/photo-1552332386-f8dd00dc2f85?auto=format&fit=crop&w=900&q=82',description:'Golden fish, crunchy slaw, avocado, and a creamy lime sauce.',ingredients:[['White fish','450 g'],['Corn tortillas','8'],['Cabbage','2 cups'],['Lime','2'],['Avocado','1']],instructions:'Season and pan-sear the fish until golden.\nMix cabbage with lime and a pinch of salt.\nWarm tortillas and fill with fish, slaw, avocado, and sauce.'},
-  {id:'chocolate-cake',name:'Chocolate Cloud Cake',category:'Dessert',cuisine:'French',image:'https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=900&q=82',description:'A rich, tender chocolate cake with a glossy ganache finish.',ingredients:[['Dark chocolate','200 g'],['Flour','1¼ cups'],['Eggs','3'],['Butter','120 g'],['Sugar','¾ cup']],instructions:'Melt chocolate and butter together.\nWhisk eggs with sugar, then fold in the chocolate and flour.\nBake at 175°C for 28–32 minutes and cool before serving.'},
-  {id:'garden-salad',name:'Garden Harvest Salad',category:'Vegetarian',cuisine:'Mediterranean',image:'https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=900&q=82',description:'Crisp vegetables, creamy feta, herbs, and lemon vinaigrette.',ingredients:[['Mixed greens','4 cups'],['Cucumber','1'],['Cherry tomatoes','1 cup'],['Feta','100 g'],['Lemon','1']],instructions:'Wash and dry the vegetables.\nWhisk lemon juice with olive oil, salt, and pepper.\nToss everything together just before serving.'},
-  {id:'tomato-soup',name:'Roasted Tomato Soup',category:'Soup',cuisine:'Italian',image:'https://images.unsplash.com/photo-1547592166-23ac45744acd?auto=format&fit=crop&w=900&q=82',description:'Velvety roasted tomato soup finished with basil and cream.',ingredients:[['Tomatoes','1 kg'],['Onion','1'],['Garlic','1 bulb'],['Vegetable stock','2 cups'],['Basil','1 handful']],instructions:'Roast tomatoes, onion, and garlic until caramelized.\nBlend with warm stock until smooth.\nSimmer for 10 minutes, season, and garnish with basil.'},
-  {id:'vegetable-curry',name:'Coconut Vegetable Curry',category:'Vegetarian',cuisine:'Indian',image:'https://images.unsplash.com/photo-1603894584373-5ac82b2ae398?auto=format&fit=crop&w=900&q=82',description:'Colorful vegetables simmered in a fragrant coconut curry sauce.',ingredients:[['Mixed vegetables','5 cups'],['Coconut milk','400 ml'],['Curry powder','2 tbsp'],['Chickpeas','1 can'],['Cilantro','½ cup']],instructions:'Toast curry powder in a little oil.\nAdd vegetables, chickpeas, and coconut milk.\nSimmer until tender and finish with cilantro.'},
-  {id:'pancakes',name:'Berry Cloud Pancakes',category:'Breakfast',cuisine:'American',image:'https://images.unsplash.com/photo-1528207776546-365bb710ee93?auto=format&fit=crop&w=900&q=82',description:'Fluffy breakfast pancakes topped with berries and maple syrup.',ingredients:[['Flour','1½ cups'],['Milk','1¼ cups'],['Egg','1'],['Baking powder','2 tsp'],['Mixed berries','1 cup']],instructions:'Whisk dry ingredients, then fold in milk and egg.\nCook ladlefuls on a lightly buttered skillet until golden.\nServe warm with berries and maple syrup.'},
-  {id:'salmon-bowl',name:'Sesame Salmon Bowl',category:'Seafood',cuisine:'Japanese',image:'https://images.unsplash.com/photo-1467003909585-2f8a72700288?auto=format&fit=crop&w=900&q=82',description:'Glazed salmon with rice, greens, avocado, and sesame.',ingredients:[['Salmon fillets','2'],['Cooked rice','2 cups'],['Soy sauce','2 tbsp'],['Avocado','1'],['Sesame seeds','1 tbsp']],instructions:'Brush salmon with soy glaze and roast at 200°C for 10–12 minutes.\nDivide rice and vegetables between bowls.\nTop with salmon and sesame seeds.'}
-];
+import { recipes } from './js/data.js';
+import { applyStoredTheme, clearFilters, state, toggleFavorite, toggleTheme } from './js/state.js';
+import { initializeImageFallbacks, render, renderCategories, renderCuisines, showToast } from './js/render.js';
+import { closeRecipeModal, openRecipe } from './js/modal.js';
+import { initializeCategoryCarousel, toggleCategoriesExpansion } from './js/category-carousel.js';
 
-const categories=[['Chicken','🍗'],['Beef','🥩'],['Seafood','🐟'],['Pasta','🍝'],['Vegetarian','🥗'],['Dessert','🍰'],['Breakfast','🍳'],['Soup','🥣']];
-const cuisines=[['Italian','🇮🇹'],['American','🇺🇸'],['British','🇬🇧'],['Mexican','🇲🇽'],['Japanese','🇯🇵'],['Indian','🇮🇳']];
-const state={query:'',filter:'',favorites:new Set(JSON.parse(localStorage.getItem('recipefinder:favorites')||'[]'))};
-const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => [...document.querySelectorAll(selector)];
 
-function recipeCard(r,compact=false){return `<article class="recipe-card" data-id="${r.id}"><img class="card-image" src="${r.image}" alt="${r.name}" loading="lazy"><button class="heart ${state.favorites.has(r.id)?'saved':''}" data-favorite="${r.id}" aria-label="${state.favorites.has(r.id)?'Remove from':'Save to'} favorites">${state.favorites.has(r.id)?'♥':'♡'}</button><div class="card-body"><div class="tags"><span class="tag">${r.category}</span><span class="tag alt">${r.cuisine}</span></div><h3>${r.name}</h3><p>${r.description}</p><button class="view-btn" data-view="${r.id}">View recipe →</button></div></article>`}
-function filtered(){const q=state.query.toLowerCase();return recipes.filter(r=>(!state.filter||r.category===state.filter||r.cuisine===state.filter)&&(!q||[r.name,r.category,r.cuisine,r.description,...r.ingredients.flat()].join(' ').toLowerCase().includes(q)))}
-function render(){const list=filtered();$('#recommended-grid').innerHTML=list.slice(0,4).map(r=>recipeCard(r)).join('');$('#more-grid').innerHTML=list.slice(4).map(r=>recipeCard(r,true)).join('');$('#empty-state').hidden=list.length>0;$$('.category').forEach(b=>b.classList.toggle('active',b.dataset.filter===state.filter));$$('.quick-filters button').forEach(b=>b.classList.toggle('active',b.dataset.filter===state.filter));renderFavorites();}
-function renderCategories(){ $('#category-row').innerHTML=categories.map(([name,emoji])=>{const r=recipes.find(x=>x.category===name);return `<button class="category" data-filter="${name}"><img src="${r?.image||recipes[0].image}" alt="" loading="lazy"><span>${emoji} ${name}</span></button>`}).join('') }
-function renderCuisines(){ $('#cuisine-list').innerHTML=cuisines.map(([name,flag])=>`<button class="cuisine" data-filter="${name}"><span>${flag}</span><strong>${name}</strong><i>Explore →</i></button>`).join('') }
-function renderFavorites(){const favs=recipes.filter(r=>state.favorites.has(r.id));$('#fav-count').textContent=favs.length;$('#favorite-list').innerHTML=favs.length?favs.slice(0,4).map(r=>`<div class="favorite-item"><img src="${r.image}" alt=""><div><strong>${r.name}</strong><small>${r.category}</small></div><button class="mini-remove" data-favorite="${r.id}" aria-label="Remove ${r.name}">×</button></div>`).join(''):'<p class="empty-mini">No saved recipes yet. Tap a heart to keep one here.</p>'}
-function openRecipe(id){const r=recipes.find(x=>x.id===id);if(!r)return;$('#modal-content').innerHTML=`<img class="modal-hero" src="${r.image}" alt="${r.name}"><div class="modal-copy"><div class="tags"><span class="tag">${r.category}</span><span class="tag alt">${r.cuisine}</span></div><h2 id="modal-title">${r.name}</h2><p>${r.description}</p><div class="detail-columns"><section><h3>Ingredients</h3><ul class="ingredients">${r.ingredients.map(([i,m])=>`<li><span>${i}</span><strong>${m}</strong></li>`).join('')}</ul></section><section><h3>Cooking instructions</h3><div class="instructions">${r.instructions}</div>${r.tutorial?`<a class="tutorial-link" href="${r.tutorial}" target="_blank" rel="noreferrer">Watch tutorial ↗</a>`:''}</section></div></div>`;$('#recipe-modal').hidden=false;document.body.style.overflow='hidden';$('.modal-close').focus()}
-function closeModal(){$('#recipe-modal').hidden=true;document.body.style.overflow=''}
-function saveFavorites(){localStorage.setItem('recipefinder:favorites',JSON.stringify([...state.favorites]));render();toast('Favorites updated')}
-function toast(message){const el=$('#toast');el.textContent=message;el.classList.add('show');clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.classList.remove('show'),1800)}
-function applyFilter(value){state.filter=state.filter===value?'':value;render();$('#recommended').scrollIntoView({behavior:'smooth'})}
+function applyFilter(value) {
+  state.filter = state.filter === value ? '' : value;
+  state.query = '';
+  state.view = 'default';
+  $('#search-input').value = '';
+  render();
+  $('#recommended').scrollIntoView({ behavior: 'smooth' });
+  showToast(state.filter ? `Showing ${state.filter} recipes` : 'Showing all recipes');
+}
 
-renderCategories();renderCuisines();render();
-const savedTheme=localStorage.getItem('recipefinder:theme');if(savedTheme==='dark'||(!savedTheme&&matchMedia('(prefers-color-scheme: dark)').matches))document.body.classList.add('dark');
-$('#theme-toggle').addEventListener('click',()=>{document.body.classList.toggle('dark');const dark=document.body.classList.contains('dark');localStorage.setItem('recipefinder:theme',dark?'dark':'light');$('#theme-toggle').setAttribute('aria-label',`Switch to ${dark?'light':'dark'} mode`) });
-$('#search-form').addEventListener('submit',e=>{e.preventDefault();state.query=$('#search-input').value.trim();render();$('#recommended').scrollIntoView({behavior:'smooth'});toast(state.query?`Showing results for “${state.query}”`:'Showing all recipes')});
-$('#search-input').addEventListener('input',e=>{if(!e.target.value){state.query='';render()}});
-document.addEventListener('click',e=>{const fav=e.target.closest('[data-favorite]');if(fav){const id=fav.dataset.favorite;state.favorites.has(id)?state.favorites.delete(id):state.favorites.add(id);saveFavorites();return}const view=e.target.closest('[data-view]');if(view)return openRecipe(view.dataset.view);const filter=e.target.closest('[data-filter]');if(filter)return applyFilter(filter.dataset.filter);if(e.target.closest('[data-clear]')){state.filter='';state.query='';$('#search-input').value='';render();return}const scroll=e.target.closest('[data-scroll]');if(scroll)document.getElementById(scroll.dataset.scroll)?.scrollIntoView({behavior:'smooth'});const section=e.target.closest('[data-section-link]');if(section)document.getElementById(section.dataset.sectionLink)?.scrollIntoView({behavior:'smooth'});if(e.target.closest('.surprise-btn'))openRecipe(recipes[Math.floor(Math.random()*recipes.length)].id);if(e.target.closest('[data-close]'))closeModal()});
-$('#menu-btn').addEventListener('click',()=>{const open=$('#sidebar').classList.toggle('open');$('#menu-btn').setAttribute('aria-expanded',open)});
-$$('.nav-link').forEach(link=>link.addEventListener('click',()=>{$$('.nav-link').forEach(x=>x.classList.remove('active'));link.classList.add('active');$('#sidebar').classList.remove('open');$('#menu-btn').setAttribute('aria-expanded','false');if(link.dataset.section==='favorites'&&!state.favorites.size)toast('You have no saved recipes yet')}));
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();$('#sidebar').classList.remove('open')}});
+function showRecipeCollection(view) {
+  clearFilters();
+  state.view = view;
+  $('#search-input').value = '';
+  render();
+  $('#recommended').scrollIntoView({ behavior: 'smooth' });
+  showToast(view === 'favorites' ? 'Showing all saved recipes' : 'Showing all recipes');
+}
+
+function restoreDiscoverView(destination = 'recommended', announce = true) {
+  clearFilters();
+  $('#search-input').value = '';
+  render();
+  const target = document.getElementById(destination);
+  target?.scrollIntoView({ behavior: 'smooth' });
+  target?.focus({ preventScroll: true });
+  if (announce) showToast('Back to recipe discovery');
+}
+
+function showAllCuisines() {
+  clearFilters();
+  $('#search-input').value = '';
+  render();
+  $('#cuisines').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $('#cuisine-list').focus({ preventScroll: true });
+  showToast('All cuisines are shown');
+}
+
+function initializeTheme() {
+  updateThemeToggle(applyStoredTheme());
+  $('#theme-toggle').addEventListener('click', () => {
+    updateThemeToggle(toggleTheme());
+  });
+}
+
+function updateThemeToggle(dark) {
+  const themeToggle = $('#theme-toggle');
+  themeToggle.setAttribute('aria-pressed', String(dark));
+  themeToggle.setAttribute('aria-label', `Switch to ${dark ? 'light' : 'dark'} mode`);
+  themeToggle.title = `Switch to ${dark ? 'light' : 'dark'} mode`;
+}
+
+function initializeSearch() {
+  $('#search-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    state.filter = '';
+    state.view = 'default';
+    state.query = $('#search-input').value.trim();
+    render();
+    $('#recommended').scrollIntoView({ behavior: 'smooth' });
+    showToast(state.query ? `Showing results for “${state.query}”` : 'Showing all recipes');
+  });
+
+  $('#search-input').addEventListener('input', (event) => {
+    if (!event.target.value) {
+      state.query = '';
+      render();
+    }
+  });
+}
+
+function initializePageActions() {
+  document.addEventListener('click', (event) => {
+    const favoriteButton = event.target.closest('[data-favorite]');
+    if (favoriteButton) {
+      toggleFavorite(favoriteButton.dataset.favorite);
+      render();
+      showToast('Favorites updated');
+      return;
+    }
+
+    const viewButton = event.target.closest('[data-view]');
+    if (viewButton) {
+      openRecipe(viewButton.dataset.view);
+      return;
+    }
+
+    const filterButton = event.target.closest('[data-filter]');
+    if (filterButton) {
+      applyFilter(filterButton.dataset.filter);
+      return;
+    }
+
+    const viewAllButton = event.target.closest('[data-view-all]');
+    if (viewAllButton) {
+      const target = viewAllButton.dataset.viewAll;
+      if (target === 'categories') toggleCategoriesExpansion();
+      else if (target === 'cuisines') showAllCuisines();
+      else showRecipeCollection(target === 'favorites' ? 'favorites' : 'all');
+      return;
+    }
+
+    if (event.target.closest('[data-back-to-discover]')) {
+      restoreDiscoverView();
+      return;
+    }
+
+    if (event.target.closest('[data-clear]')) {
+      clearFilters();
+      $('#search-input').value = '';
+      render();
+      return;
+    }
+
+    const scrollButton = event.target.closest('[data-scroll]');
+    if (scrollButton) {
+      document.getElementById(scrollButton.dataset.scroll)?.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    if (event.target.closest('.surprise-btn')) {
+      const randomRecipe = recipes[Math.floor(Math.random() * recipes.length)];
+      openRecipe(randomRecipe.id);
+    }
+
+    if (event.target.closest('[data-close]')) closeRecipeModal();
+  });
+}
+
+function initializeNavigation() {
+  $('#menu-btn').addEventListener('click', () => {
+    const open = $('#sidebar').classList.toggle('open');
+    $('#menu-btn').setAttribute('aria-expanded', open);
+  });
+
+  $$('.nav-link').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      $$('.nav-link').forEach((item) => item.classList.remove('active'));
+      link.classList.add('active');
+      $('#sidebar').classList.remove('open');
+      $('#menu-btn').setAttribute('aria-expanded', 'false');
+      if (link.dataset.section === 'home' || link.dataset.section === 'recommended') {
+        clearFilters();
+        $('#search-input').value = '';
+        render();
+      } else if (link.dataset.section === 'favorites') {
+        event.preventDefault();
+        showRecipeCollection('favorites');
+      }
+    });
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closeRecipeModal();
+      $('#sidebar').classList.remove('open');
+    }
+  });
+}
+
+function initializeApp() {
+  initializeImageFallbacks();
+  renderCategories();
+  initializeCategoryCarousel();
+  renderCuisines();
+  render();
+  initializeTheme();
+  initializeSearch();
+  initializePageActions();
+  initializeNavigation();
+}
+
+initializeApp();

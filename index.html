@@ -48,7 +48,7 @@
           <input id="search-input" type="search" autocomplete="off" placeholder="Search recipes, ingredients, or cuisines…">
           <button type="submit">Search</button>
         </form>
-        <button class="theme-toggle" id="theme-toggle" aria-label="Switch to dark mode" title="Toggle theme"><span>☀</span><i></i><span>☾</span></button>
+        <button class="theme-toggle" id="theme-toggle" aria-label="Switch to dark mode" aria-pressed="false" title="Toggle theme"><span aria-hidden="true">☀</span><i aria-hidden="true"></i><span aria-hidden="true">☾</span></button>
         <div class="guest"><span>👩🏽‍🍳</span><strong>Guest</strong></div>
       </header>
 
@@ -60,7 +60,6 @@
             <p>Discover delicious meals from around the world. Search, explore, and save your favorites.</p>
             <div class="hero-actions">
               <button class="primary" data-scroll="recommended">Explore recipes <span>→</span></button>
-              <button class="secondary surprise-btn">⤨ Surprise me</button>
             </div>
           </div>
           <div class="hero-image" role="img" aria-label="Colorful grilled chicken and avocado bowl"></div>
@@ -68,19 +67,28 @@
         </section>
 
         <section class="content-section" id="categories" aria-labelledby="categories-title">
-          <div class="section-heading"><h2 id="categories-title">🔥 Popular categories</h2><button class="text-button" data-clear>View all →</button></div>
-          <div class="category-row" id="category-row"></div>
+          <div class="section-heading">
+            <h2 id="categories-title">🔥 Popular categories</h2>
+            <div class="category-actions">
+              <button class="text-button" data-view-all="categories" aria-expanded="false" aria-controls="category-row">View all →</button>
+              <div class="category-nav" aria-label="Popular categories carousel controls">
+                <button class="carousel-arrow" id="category-prev" type="button" aria-label="Previous categories" aria-controls="category-row" disabled>←</button>
+                <button class="carousel-arrow" id="category-next" type="button" aria-label="Next categories" aria-controls="category-row">→</button>
+              </div>
+            </div>
+          </div>
+          <div class="category-row" id="category-row" role="region" aria-label="Popular recipe categories" tabindex="0"></div>
         </section>
 
-        <section class="content-section" id="recommended" aria-labelledby="recommended-title">
-          <div class="section-heading"><h2 id="recommended-title">🍴 Recommended for you</h2><button class="text-button" data-clear>View all →</button></div>
+        <section class="content-section" id="recommended" aria-labelledby="recommended-title" tabindex="-1">
+          <div class="section-heading"><h2 id="recommended-title">🍴 Recommended for you</h2><div class="recipe-view-actions"><button class="back-button" id="back-to-discover" type="button" data-back-to-discover hidden>← Back to Discover</button><button class="text-button" id="recommended-view-all" data-view-all="recipes">View all →</button></div></div>
           <div class="recipe-grid featured-grid" id="recommended-grid"></div>
+          <div class="empty-state" id="empty-state" hidden><span>🥣</span><h3 id="empty-title">No recipes found</h3><p id="empty-message">Try another search or clear your filters.</p><button class="primary" data-clear>Clear filters</button></div>
         </section>
 
-        <section class="content-section" aria-labelledby="more-title">
-          <div class="section-heading"><h2 id="more-title">🕘 More recipes to explore</h2><button class="text-button" data-clear>View all →</button></div>
+        <section class="content-section" id="more-recipes" aria-labelledby="more-title">
+          <div class="section-heading"><h2 id="more-title">🕘 More recipes to explore</h2><button class="text-button" data-view-all="recipes">View all →</button></div>
           <div class="recipe-grid compact-grid" id="more-grid"></div>
-          <div class="empty-state" id="empty-state" hidden><span>🥣</span><h3>No recipes found</h3><p>Try another search or clear your filters.</p><button class="primary" data-clear>Clear filters</button></div>
         </section>
       </main>
       <footer><p>RecipeFinder visual prototype · Sample recipe data only</p><p>Food photos: <a href="https://unsplash.com" target="_blank" rel="noreferrer">Unsplash</a> contributors · Hero image generated for this prototype</p></footer>
@@ -88,15 +96,15 @@
 
     <aside class="rightbar" aria-label="Recipe highlights">
       <section class="side-card" id="favorites">
-        <div class="side-heading"><h2>💗 Saved recipes</h2><button class="text-button" data-section-link="favorites">View all →</button></div>
+        <div class="side-heading"><h2>💗 Saved recipes</h2><button class="text-button" data-view-all="favorites">View all →</button></div>
         <div id="favorite-list" class="favorite-list"></div>
       </section>
       <section class="random-card">
         <span class="sparkle">✦</span><h2>🎲 Random recipe</h2><p>Not sure what to cook? Let us pick something delicious.</p><button class="surprise-btn">⤨ Surprise me</button>
       </section>
       <section class="side-card" id="cuisines">
-        <div class="side-heading"><h2>🌐 Popular cuisines</h2><button class="text-button" data-clear>View all →</button></div>
-        <div class="cuisine-list" id="cuisine-list"></div>
+        <div class="side-heading"><h2>🌐 Popular cuisines</h2><button class="text-button" data-view-all="cuisines">View all →</button></div>
+        <div class="cuisine-list" id="cuisine-list" tabindex="-1"></div>
       </section>
       <section class="quote-card"><span>💡</span><h2>Cooking inspiration</h2><blockquote>“Good food is all the sweeter when shared with good friends.”</blockquote></section>
     </aside>
@@ -110,6 +118,6 @@
     </article>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
