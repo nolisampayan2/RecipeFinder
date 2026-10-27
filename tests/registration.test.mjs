@@ -6,6 +6,9 @@ import {
   createRegistrationService,
   validateRegistrationInput,
 } from '../js/registration.js';
+import { prepareRegistrationPkceClient } from '../js/registration-browser.js';
+
+assert.equal(typeof prepareRegistrationPkceClient, 'function', 'The inert browser import seam must resolve');
 
 const validInput = Object.freeze({
   displayName: '  Test Cook  ',
@@ -108,10 +111,21 @@ assert.ok(
   registerHtml.indexOf(sdkUrl) < registerHtml.indexOf('<script type="module" src="js/auth-ui.js"></script>'),
   'The pinned SDK must load before the existing native module'
 );
-assert.doesNotMatch(registerHtml, /registration\.js|supabase-client\.js|supabase-config\.js/i);
+const preparationTag = '<script type="module" src="js/registration-browser.js"></script>';
+assert.ok(registerHtml.includes(preparationTag), 'The inert registration preparation entrypoint must be loaded');
+assert.ok(
+  registerHtml.indexOf('<script type="module" src="js/auth-ui.js"></script>') < registerHtml.indexOf(preparationTag),
+  'The existing preview UI module must retain ownership of the form before the inert preparation entrypoint'
+);
+assert.doesNotMatch(registerHtml, /(?:src|href)=["'][^"']*(?:registration\.js|supabase-client\.js|supabase-config\.js)/i);
 assert.doesNotMatch(registerHtml, /initializeSupabaseClient|createClient|signUp|signInWithPassword|exchangeCodeForSession/);
 
 const source = await readFile(new URL('../js/registration.js', import.meta.url), 'utf8');
 assert.doesNotMatch(source, /\bfetch\s*\(|XMLHttpRequest|WebSocket|localStorage|sessionStorage|console\./i);
+
+const browserSource = await readFile(new URL('../js/registration-browser.js', import.meta.url), 'utf8');
+assert.match(browserSource, /createPkceBrowserInitializer as prepareRegistrationPkceClient/);
+assert.doesNotMatch(browserSource, /supabase-config\.js|\.initialize\s*\(|createClient\s*\(|signUp\s*\(|signInWithPassword|exchangeCodeForSession|getSession|onAuthStateChange/);
+assert.doesNotMatch(browserSource, /localStorage|sessionStorage|location\.(?:search|hash)|URLSearchParams|addEventListener|console\./);
 
 console.log('Offline registration preparation tests passed with fake clients only.');
