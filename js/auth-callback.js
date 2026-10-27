@@ -2,6 +2,16 @@ const SENSITIVE_QUERY_KEYS = new Set(['code', 'token_hash']);
 const PROVIDER_ERROR_KEYS = new Set(['error', 'error_code', 'error_description']);
 const TOKEN_FRAGMENT_KEYS = new Set(['access_token', 'refresh_token']);
 
+export const CONFIRMATION_STATUS = Object.freeze({
+  CONFIRMED: 'confirmed',
+  UNAVAILABLE: 'unavailable',
+});
+
+export const CONFIRMATION_MESSAGES = Object.freeze({
+  CONFIRMED: 'Email confirmation completed. Return to sign in to continue.',
+  UNAVAILABLE: 'This confirmation link could not be processed. Return to sign in or registration to continue.',
+});
+
 function hasKey(params, keys) {
   return [...keys].some((key) => params.has(key));
 }
@@ -61,6 +71,55 @@ export function cleanCallbackUrl(locationLike, historyLike) {
   if (!locationLike.search && !locationLike.hash) return false;
   historyLike.replaceState(null, '', cleanPath);
   return true;
+}
+
+export function createPkceConfirmationController({ exchangeAuthorizationCode } = {}) {
+  let processingPromise;
+
+  return Object.freeze({
+    process({ location, history } = {}) {
+      if (processingPromise) return processingPromise;
+
+      const classification = classifyAuthCallback(location?.href);
+      let authorizationCode = '';
+      if (classification.kind === 'pkce') {
+        try {
+          authorizationCode = new URL(location.href).searchParams.get('code')?.trim() || '';
+        } catch {
+          authorizationCode = '';
+        }
+      }
+
+      const scrubbed = cleanCallbackUrl(location, history);
+      if (!scrubbed || classification.kind !== 'pkce' || !authorizationCode) {
+        processingPromise = Promise.resolve(Object.freeze({
+          status: CONFIRMATION_STATUS.UNAVAILABLE,
+          message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+        }));
+        return processingPromise;
+      }
+
+      if (typeof exchangeAuthorizationCode !== 'function') {
+        processingPromise = Promise.resolve(Object.freeze({
+          status: CONFIRMATION_STATUS.UNAVAILABLE,
+          message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+        }));
+        return processingPromise;
+      }
+
+      processingPromise = Promise.resolve()
+        .then(() => exchangeAuthorizationCode(authorizationCode))
+        .then((result) => Object.freeze(!result || typeof result !== 'object' || result.error || !result.data
+          ? { status: CONFIRMATION_STATUS.UNAVAILABLE, message: CONFIRMATION_MESSAGES.UNAVAILABLE }
+          : { status: CONFIRMATION_STATUS.CONFIRMED, message: CONFIRMATION_MESSAGES.CONFIRMED }))
+        .catch(() => Object.freeze({
+          status: CONFIRMATION_STATUS.UNAVAILABLE,
+          message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+        }));
+
+      return processingPromise;
+    },
+  });
 }
 
 export function callbackView(kind) {
