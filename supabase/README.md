@@ -20,8 +20,8 @@ The foundation migration uses one transaction so schema creation, grants, and RL
 - Anonymous and authenticated visitors can select published recipes and active categories/cuisines.
 - Only authenticated users whose server-managed role is `admin` can see drafts or mutate recipes, categories, and cuisines.
 - A published recipe must reference active category and cuisine rows. Database triggers also prevent deactivating taxonomy rows while published recipes reference them.
-- Favorites use `(user_id, recipe_id)` as the primary key and are accessible only to the owning user.
-- Table privileges are explicitly revoked from `PUBLIC`, `anon`, and `authenticated` before minimum privileges are granted. Profile updates are limited to `display_name` and `avatar_url`. RLS is an additional enforcement layer, not a substitute for grants.
+- Favorites use `(user_id, recipe_id)` as the primary key and are accessible only to the owning user. Ordinary users can insert or see favorites only while the referenced recipe is published; administrators retain access to their own favorites for recipes they are authorized to see as drafts.
+- Table and identity-sequence privileges are explicitly revoked from `PUBLIC`, `anon`, and `authenticated` before minimum privileges are granted. Authenticated access to category and cuisine identity sequences is limited to `USAGE`, which is required for administrator inserts through the shared authenticated database role. Profile updates are limited to `display_name` and `avatar_url`. RLS is an additional enforcement layer, not a substitute for grants.
 - Seed users and credentials are intentionally absent.
 
 `private.handle_new_user()` and `private.is_admin()` are `SECURITY DEFINER` functions. They use an empty search path and fully qualified object names. They must remain owned by the trusted migration owner. Do not transfer ownership to a login role or grant public execution. The signup trigger must be tested in a disposable environment because any trigger failure can block user creation.
@@ -88,16 +88,17 @@ These cases must be executed against a disposable/local Supabase project before 
 4. User A cannot read, insert, or delete User B's favorites.
 5. User A cannot read or update User B's profile.
 6. A favorite insert with a forged `user_id` is rejected.
-7. An admin can create a draft, read it, publish it with `published_at`, and unpublish it only by clearing `published_at`.
-8. An admin cannot delete a category or cuisine still referenced by recipes because those foreign keys use `ON DELETE RESTRICT`.
-9. An admin cannot publish a recipe whose category or cuisine is inactive.
-10. An admin cannot deactivate a category or cuisine referenced by a published recipe, including a concurrent publication/deactivation attempt.
-11. A profile owner can update `display_name` and `avatar_url` but cannot update `id`, `created_at`, or `updated_at` directly.
-12. Deleting an Auth user cascades their profile, role, and favorites while retaining authored recipes with `created_by = null`.
-13. Deleting a recipe cascades its favorite references.
-14. Duplicate external `(external_provider, external_id)` values are rejected.
-15. Invalid ingredient JSON, `javascript:`, `data:`, `vbscript:`, protocol-relative URLs, backslashes, whitespace, traversal paths, non-HTTPS tutorial URLs, and inconsistent publication/provenance states are rejected.
-16. Catalog inspection confirms no unintended table or function privileges remain on `PUBLIC`, `anon`, or ordinary authenticated users.
+7. An ordinary user cannot insert a favorite for a draft recipe, and an existing favorite is hidden if its recipe is subsequently unpublished; an administrator retains owner-scoped access to their own draft-recipe favorites.
+8. An admin can create a draft, read it, publish it with `published_at`, and unpublish it only by clearing `published_at`.
+9. An admin cannot delete a category or cuisine still referenced by recipes because those foreign keys use `ON DELETE RESTRICT`.
+10. An admin cannot publish a recipe whose category or cuisine is inactive.
+11. An admin cannot deactivate a category or cuisine referenced by a published recipe, including a concurrent publication/deactivation attempt.
+12. A profile owner can update `display_name` and `avatar_url` but cannot update `id`, `created_at`, or `updated_at` directly.
+13. Deleting an Auth user cascades their profile, role, and favorites while retaining authored recipes with `created_by = null`.
+14. Deleting a recipe cascades its favorite references.
+15. Duplicate external `(external_provider, external_id)` values are rejected.
+16. Invalid ingredient JSON, `javascript:`, `data:`, `vbscript:`, protocol-relative URLs, backslashes, whitespace, traversal paths, non-HTTPS tutorial URLs, and inconsistent publication/provenance states are rejected.
+17. Catalog inspection confirms no unintended table, sequence, or function privileges remain on `PUBLIC`, `anon`, or ordinary authenticated users.
 
 ## Rollback and compatibility limits
 

@@ -381,8 +381,10 @@ grant insert, update, delete on table public.cuisines to authenticated;
 grant select on table public.recipes to anon, authenticated;
 grant insert, update, delete on table public.recipes to authenticated;
 grant select, insert, delete on table public.favorites to authenticated;
-grant usage, select on sequence public.recipe_categories_id_seq to authenticated;
-grant usage, select on sequence public.cuisines_id_seq to authenticated;
+revoke all on sequence public.recipe_categories_id_seq from public, anon, authenticated;
+revoke all on sequence public.cuisines_id_seq from public, anon, authenticated;
+grant usage on sequence public.recipe_categories_id_seq to authenticated;
+grant usage on sequence public.cuisines_id_seq to authenticated;
 
 create policy profiles_select_own
 on public.profiles for select
@@ -480,12 +482,28 @@ using ((select private.is_admin()));
 create policy favorites_select_own
 on public.favorites for select
 to authenticated
-using ((select auth.uid()) = user_id);
+using (
+  (select auth.uid()) = user_id
+  and exists (
+    select 1
+    from public.recipes as recipe
+    where recipe.id = favorites.recipe_id
+      and (recipe.status = 'published' or (select private.is_admin()))
+  )
+);
 
 create policy favorites_insert_own
 on public.favorites for insert
 to authenticated
-with check ((select auth.uid()) = user_id);
+with check (
+  (select auth.uid()) = user_id
+  and exists (
+    select 1
+    from public.recipes as recipe
+    where recipe.id = favorites.recipe_id
+      and (recipe.status = 'published' or (select private.is_admin()))
+  )
+);
 
 create policy favorites_delete_own
 on public.favorites for delete
