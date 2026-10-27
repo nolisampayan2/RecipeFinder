@@ -1,4 +1,8 @@
 import { createPkceBrowserInitializer } from './supabase-browser.js';
+import {
+  activateRegistrationSubmitController,
+  createRegistrationSubmitController,
+} from './auth-ui.js';
 
 export const REGISTRATION_CLIENT_STATE = Object.freeze({
   READY: 'ready',
@@ -11,6 +15,26 @@ export function createRegistrationClientActivation(dependencies) {
   return Object.freeze({
     activate() {
       return initializer.initialize();
+    },
+  });
+}
+
+export function createRegistrationControllerActivation({
+  registrationService,
+  createController = createRegistrationSubmitController,
+  installController = activateRegistrationSubmitController,
+} = {}) {
+  let activated = false;
+
+  return Object.freeze({
+    activate() {
+      if (activated) return true;
+      if (typeof registrationService?.submit !== 'function') return false;
+      if (typeof createController !== 'function' || typeof installController !== 'function') return false;
+
+      const controller = createController(registrationService.submit.bind(registrationService));
+      activated = installController(controller) === true;
+      return activated;
     },
   });
 }

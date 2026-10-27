@@ -11,6 +11,9 @@ import {
   createRegistrationClientActivation,
   createRegistrationPageInitialization,
 } from '../js/registration-browser.js';
+import {
+  createRegistrationSubmitController,
+} from '../js/auth-ui.js';
 
 assert.equal(typeof createRegistrationClientActivation, 'function', 'The inert browser import seam must resolve');
 
@@ -49,6 +52,28 @@ assert.throws(
   /forbidden/i
 );
 assert.equal(browserClientCreations, 1, 'Rejected activation must not reach the SDK');
+
+const controllerModule = await import('../js/registration-browser.js');
+let preparedSubmitCalls = 0;
+let installedController;
+const controllerActivation = controllerModule.createRegistrationControllerActivation({
+  registrationService: {
+    async submit(input) {
+      preparedSubmitCalls += 1;
+      return { status: REGISTRATION_STATUS.SUBMITTED, message: REGISTRATION_MESSAGES.SUBMITTED, input };
+    },
+  },
+  installController(controller) {
+    installedController = controller;
+    return true;
+  },
+});
+assert.equal(preparedSubmitCalls, 0, 'Preparing controller activation must remain inert');
+assert.equal(controllerActivation.activate(), true);
+assert.equal(controllerActivation.activate(), true, 'Controller activation must be idempotent');
+assert.equal(typeof installedController?.submit, 'function');
+assert.equal(preparedSubmitCalls, 0, 'Explicit activation must not submit registration');
+assert.equal(controllerModule.createRegistrationControllerActivation({}).activate(), false);
 
 let configLoads = 0;
 const readinessRoot = { dataset: {} };
@@ -98,6 +123,66 @@ const validInput = Object.freeze({
   password: 'StrongPass1',
   confirmPassword: 'StrongPass1',
 });
+
+function createFakeForm() {
+  const submitButton = { disabled: false };
+  const fields = new Map([
+    ['password', { value: validInput.password }],
+    ['confirmPassword', { value: validInput.confirmPassword }],
+  ]);
+  const attributes = new Map();
+  return {
+    submitButton,
+    fields,
+    attributes,
+    querySelector(selector) {
+      return selector === '[type="submit"]' ? submitButton : null;
+    },
+    elements: { namedItem: (name) => fields.get(name) ?? null },
+    setAttribute: (name, value) => attributes.set(name, value),
+  };
+}
+
+let releaseControllerRequest;
+let controllerSubmitCalls = 0;
+const submitController = createRegistrationSubmitController(() => {
+  controllerSubmitCalls += 1;
+  return new Promise((resolve) => {
+    releaseControllerRequest = () => resolve({
+      status: REGISTRATION_STATUS.SUBMITTED,
+      message: REGISTRATION_MESSAGES.SUBMITTED,
+    });
+  });
+});
+const controllerForm = createFakeForm();
+const controlledRequest = submitController.submit(validInput, { form: controllerForm });
+assert.equal(controllerForm.submitButton.disabled, true);
+assert.equal(controllerForm.attributes.get('aria-busy'), 'true');
+assert.equal(controllerForm.fields.get('password').value, validInput.password);
+assert.deepEqual(await submitController.submit(validInput, { form: controllerForm }), {
+  status: REGISTRATION_STATUS.PENDING,
+});
+assert.equal(controllerSubmitCalls, 1, 'The UI controller must block duplicate requests');
+releaseControllerRequest();
+assert.deepEqual(await controlledRequest, {
+  status: REGISTRATION_STATUS.SUBMITTED,
+  message: REGISTRATION_MESSAGES.SUBMITTED,
+});
+assert.equal(controllerForm.submitButton.disabled, false);
+assert.equal(controllerForm.attributes.get('aria-busy'), 'false');
+assert.equal(controllerForm.fields.get('password').value, '');
+assert.equal(controllerForm.fields.get('confirmPassword').value, '');
+
+const failedControllerForm = createFakeForm();
+const failedController = createRegistrationSubmitController(async () => {
+  throw new Error('sensitive provider detail');
+});
+assert.deepEqual(await failedController.submit(validInput, { form: failedControllerForm }), {
+  status: REGISTRATION_STATUS.UNAVAILABLE,
+  message: REGISTRATION_MESSAGES.UNAVAILABLE,
+});
+assert.equal(failedControllerForm.fields.get('password').value, '');
+assert.throws(() => createRegistrationSubmitController(), /submit function is required/i);
 
 const valid = validateRegistrationInput(validInput);
 assert.equal(valid.valid, true);
@@ -211,5 +296,19 @@ assert.match(browserSource, /import\('\.\/supabase-config\.js'\)/, 'The ignored 
 assert.doesNotMatch(browserSource, /^import\s+.*supabase-config\.js/m, 'The optional config must not be a static import');
 assert.doesNotMatch(browserSource, /createClient\s*\(|signUp\s*\(|signInWithPassword|exchangeCodeForSession|getSession|onAuthStateChange/);
 assert.doesNotMatch(browserSource, /localStorage|sessionStorage|location\.(?:search|hash)|URLSearchParams|addEventListener|console\./);
+assert.equal(
+  browserSource.match(/createRegistrationControllerActivation\s*\(/g)?.length,
+  1,
+  'The prepared registration controller must be declared but never invoked by the live entrypoint'
+);
+assert.doesNotMatch(browserSource, /createRegistrationService/, 'The live entrypoint must not construct a registration service');
+
+const authUiSource = await readFile(new URL('../js/auth-ui.js', import.meta.url), 'utf8');
+assert.equal(authUiSource.match(/addEventListener\(['"]submit['"]/g)?.length, 1, 'The form must retain one submit listener');
+assert.match(
+  authUiSource,
+  /Your details look ready\. No account was created and no email was sent\./,
+  'Preview-only registration messaging must remain the live default'
+);
 
 console.log('Offline registration preparation tests passed with fake clients only.');

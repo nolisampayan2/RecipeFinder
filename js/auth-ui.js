@@ -1,4 +1,11 @@
-import { isValidEmailAddress, validateRegistrationInput } from './registration.js';
+import {
+  REGISTRATION_MESSAGES,
+  REGISTRATION_STATUS,
+  isValidEmailAddress,
+  validateRegistrationInput,
+} from './registration.js';
+
+let activeRegistrationController = null;
 
 function setFieldError(form, name, message) {
   const input = form.elements.namedItem(name);
@@ -52,6 +59,55 @@ function updateStatus(form, message, isError = false) {
   status.classList.toggle('is-error', isError);
 }
 
+export function setRegistrationPendingState(form, pending) {
+  const submitButton = form?.querySelector?.('[type="submit"]');
+  if (submitButton) submitButton.disabled = pending;
+  form?.setAttribute?.('aria-busy', String(pending));
+}
+
+export function clearRegistrationPasswords(form) {
+  ['password', 'confirmPassword'].forEach((name) => {
+    const input = form?.elements?.namedItem?.(name);
+    if (input && typeof input.value === 'string') input.value = '';
+  });
+}
+
+export function createRegistrationSubmitController(submitRegistration) {
+  if (typeof submitRegistration !== 'function') {
+    throw new TypeError('A registration submit function is required.');
+  }
+
+  let requestPending = false;
+
+  return Object.freeze({
+    async submit(input, { form } = {}) {
+      if (requestPending) return { status: REGISTRATION_STATUS.PENDING };
+
+      requestPending = true;
+      setRegistrationPendingState(form, true);
+
+      try {
+        return await submitRegistration(input);
+      } catch {
+        return {
+          status: REGISTRATION_STATUS.UNAVAILABLE,
+          message: REGISTRATION_MESSAGES.UNAVAILABLE,
+        };
+      } finally {
+        clearRegistrationPasswords(form);
+        setRegistrationPendingState(form, false);
+        requestPending = false;
+      }
+    },
+  });
+}
+
+export function activateRegistrationSubmitController(controller) {
+  if (activeRegistrationController || typeof controller?.submit !== 'function') return false;
+  activeRegistrationController = controller;
+  return true;
+}
+
 function initializePasswordToggles() {
   document.querySelectorAll('[data-password-toggle]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -78,7 +134,7 @@ function initializeForm() {
     updateStatus(form, '');
   });
 
-  form.addEventListener('submit', (event) => {
+  form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const valid = form.dataset.authForm === 'register' ? validateRegistration(form) : validateLogin(form);
 
@@ -88,12 +144,23 @@ function initializeForm() {
       return;
     }
 
-    updateStatus(
-      form,
-      form.dataset.authForm === 'register'
-        ? 'Your details look ready. No account was created and no email was sent.'
-        : 'Your details look ready. Sign-in will be connected in Batch 3B.'
-    );
+    if (form.dataset.authForm === 'register' && activeRegistrationController) {
+      const result = await activeRegistrationController.submit({
+        displayName: valueOf(form, 'displayName'),
+        email: valueOf(form, 'email'),
+        password: valueOf(form, 'password'),
+        confirmPassword: valueOf(form, 'confirmPassword'),
+      }, { form });
+      const message = result.message || (result.status === REGISTRATION_STATUS.PENDING
+        ? 'Registration is already in progress.'
+        : REGISTRATION_MESSAGES.UNAVAILABLE);
+      updateStatus(form, message, result.status !== REGISTRATION_STATUS.SUBMITTED);
+      return;
+    }
+
+    updateStatus(form, form.dataset.authForm === 'register'
+      ? 'Your details look ready. No account was created and no email was sent.'
+      : 'Your details look ready. Sign-in will be connected in Batch 3B.');
   });
 }
 
@@ -108,6 +175,8 @@ function initializeForgotPasswordPreview() {
   });
 }
 
-initializePasswordToggles();
-initializeForm();
-initializeForgotPasswordPreview();
+if (typeof document !== 'undefined') {
+  initializePasswordToggles();
+  initializeForm();
+  initializeForgotPasswordPreview();
+}
