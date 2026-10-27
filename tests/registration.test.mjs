@@ -6,7 +6,11 @@ import {
   createRegistrationService,
   validateRegistrationInput,
 } from '../js/registration.js';
-import { createRegistrationClientActivation } from '../js/registration-browser.js';
+import {
+  REGISTRATION_CLIENT_STATE,
+  createRegistrationClientActivation,
+  createRegistrationPageInitialization,
+} from '../js/registration-browser.js';
 
 assert.equal(typeof createRegistrationClientActivation, 'function', 'The inert browser import seam must resolve');
 
@@ -45,6 +49,48 @@ assert.throws(
   /forbidden/i
 );
 assert.equal(browserClientCreations, 1, 'Rejected activation must not reach the SDK');
+
+let configLoads = 0;
+const readinessRoot = { dataset: {} };
+const pageInitialization = createRegistrationPageInitialization({
+  loadConfig: async () => {
+    configLoads += 1;
+    return { SUPABASE_CONFIG: offlinePublicConfig };
+  },
+  sdk: offlineSdk,
+  root: readinessRoot,
+});
+const firstPageInitialization = pageInitialization.initialize();
+const secondPageInitialization = pageInitialization.initialize();
+assert.equal(firstPageInitialization, secondPageInitialization, 'Page initialization must reuse one promise');
+assert.equal(await firstPageInitialization, REGISTRATION_CLIENT_STATE.READY);
+assert.equal(configLoads, 1, 'The ignored configuration module must be requested once per page context');
+assert.equal(browserClientCreations, 2, 'Simulated page activation must construct exactly one additional client');
+assert.equal(readinessRoot.dataset.supabaseClientState, REGISTRATION_CLIENT_STATE.READY);
+
+for (const unavailableCase of [
+  {
+    name: 'missing configuration module',
+    loadConfig: async () => { throw new Error('offline missing-module fixture'); },
+    sdk: offlineSdk,
+  },
+  {
+    name: 'missing SDK',
+    loadConfig: async () => ({ SUPABASE_CONFIG: offlinePublicConfig }),
+    sdk: undefined,
+  },
+  {
+    name: 'invalid configuration',
+    loadConfig: async () => ({ SUPABASE_CONFIG: { ...offlinePublicConfig, url: 'http://unsafe.example' } }),
+    sdk: offlineSdk,
+  },
+]) {
+  const root = { dataset: {} };
+  const unavailableInitialization = createRegistrationPageInitialization({ ...unavailableCase, root });
+  assert.equal(await unavailableInitialization.initialize(), REGISTRATION_CLIENT_STATE.UNAVAILABLE, unavailableCase.name);
+  assert.equal(root.dataset.supabaseClientState, REGISTRATION_CLIENT_STATE.UNAVAILABLE, unavailableCase.name);
+}
+assert.equal(browserClientCreations, 2, 'Failed page initialization must not reach the SDK');
 
 const validInput = Object.freeze({
   displayName: '  Test Cook  ',
@@ -161,7 +207,9 @@ assert.doesNotMatch(source, /\bfetch\s*\(|XMLHttpRequest|WebSocket|localStorage|
 
 const browserSource = await readFile(new URL('../js/registration-browser.js', import.meta.url), 'utf8');
 assert.match(browserSource, /createRegistrationClientActivation/);
-assert.doesNotMatch(browserSource, /supabase-config\.js|createClient\s*\(|signUp\s*\(|signInWithPassword|exchangeCodeForSession|getSession|onAuthStateChange/);
+assert.match(browserSource, /import\('\.\/supabase-config\.js'\)/, 'The ignored config must be loaded only at runtime');
+assert.doesNotMatch(browserSource, /^import\s+.*supabase-config\.js/m, 'The optional config must not be a static import');
+assert.doesNotMatch(browserSource, /createClient\s*\(|signUp\s*\(|signInWithPassword|exchangeCodeForSession|getSession|onAuthStateChange/);
 assert.doesNotMatch(browserSource, /localStorage|sessionStorage|location\.(?:search|hash)|URLSearchParams|addEventListener|console\./);
 
 console.log('Offline registration preparation tests passed with fake clients only.');
