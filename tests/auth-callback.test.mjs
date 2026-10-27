@@ -10,9 +10,54 @@ import {
   initializeAuthCallback,
   renderCallbackView,
 } from '../js/auth-callback.js';
+import { createCallbackClientInitialization } from '../js/auth-callback-browser.js';
 
 const callback = 'http://localhost/RecipeFinder/auth-callback.html';
 const secret = 'sensitive-test-value';
+const sdkUrl = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js';
+const sdkIntegrity = 'sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK';
+
+const offlinePublicConfig = Object.freeze({
+  url: 'https://recipefinder-test.supabase.co',
+  publishableKey: 'sb_publishable_test_abcdefghijklmnopqrstuvwxyz',
+});
+let callbackClientCreations = 0;
+const offlineCallbackClient = Object.freeze({ auth: Object.freeze({}) });
+const offlineSdk = Object.freeze({
+  createClient(url, key, options) {
+    callbackClientCreations += 1;
+    assert.equal(url, offlinePublicConfig.url);
+    assert.equal(key, offlinePublicConfig.publishableKey);
+    assert.deepEqual(options, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+        flowType: 'pkce',
+        skipAutoInitialize: true,
+      },
+    });
+    return offlineCallbackClient;
+  },
+});
+
+const callbackClientInitialization = createCallbackClientInitialization({
+  config: offlinePublicConfig,
+  sdk: offlineSdk,
+});
+assert.equal(callbackClientCreations, 0, 'Importing and preparing the callback initializer must remain inert');
+assert.equal(callbackClientInitialization.initialize(), offlineCallbackClient);
+assert.equal(callbackClientInitialization.initialize(), offlineCallbackClient);
+assert.equal(callbackClientCreations, 1, 'One callback context must cache one client');
+assert.throws(
+  () => createCallbackClientInitialization({ config: offlinePublicConfig }).initialize(),
+  /is not loaded/i
+);
+assert.throws(
+  () => createCallbackClientInitialization({ sdk: offlineSdk }).initialize(),
+  /configuration is missing/i
+);
+assert.equal(callbackClientCreations, 1, 'Rejected callback initialization must not reach the SDK');
 
 assert.deepEqual(classifyAuthCallback(`${callback}?code=${secret}`), { kind: 'pkce' });
 assert.deepEqual(classifyAuthCallback(callback), { kind: 'none' });
@@ -179,12 +224,35 @@ assert.equal(
 assert.equal(source.includes(secret), false, 'Fake authorization values must never enter production source');
 assert.doesNotMatch(source, /supabase-client|supabase-browser|supabase-config|createClient/);
 
+const browserSource = await readFile(new URL('../js/auth-callback-browser.js', import.meta.url), 'utf8');
+assert.match(browserSource, /createPkceBrowserInitializer/);
+assert.doesNotMatch(browserSource, /supabase-config|createPkceConfirmationController|exchangeCodeForSession|verifyOtp|getSession|signUp|signInWithPassword|onAuthStateChange/);
+assert.doesNotMatch(browserSource, /\bfetch\s*\(|XMLHttpRequest|WebSocket|localStorage|sessionStorage|console\./);
+assert.equal(
+  browserSource.match(/createCallbackClientInitialization\s*\(/g)?.length,
+  1,
+  'The callback initializer must be declared but never invoked by its live module'
+);
+
 const renderedText = JSON.stringify([...nodes.values()].map((node) => node.textContent));
 assert.equal(renderedText.includes(secret), false);
 assert.doesNotMatch(renderedText, /access_token|refresh_token|session|verifier/i);
 
 const html = await readFile(new URL('../auth-callback.html', import.meta.url), 'utf8');
-assert.doesNotMatch(html, /supabase-js|cdn\.jsdelivr|Email Verified|Authentication Successful/i);
+const sdkTag = `<script src="${sdkUrl}" integrity="${sdkIntegrity}" crossorigin="anonymous" referrerpolicy="no-referrer"></script>`;
+assert.ok(html.includes(sdkTag), 'The callback page must use the exact approved SDK tag');
+assert.equal(html.split(sdkUrl).length - 1, 1, 'The callback page must load exactly one pinned SDK');
+assert.ok(
+  html.indexOf(sdkUrl) < html.indexOf('<script type="module" src="js/auth-callback.js"></script>'),
+  'The pinned SDK must load before callback modules'
+);
+assert.ok(
+  html.indexOf('<script type="module" src="js/auth-callback.js"></script>')
+    < html.indexOf('<script type="module" src="js/auth-callback-browser.js"></script>'),
+  'URL classification and cleanup must remain the first callback module'
+);
+assert.doesNotMatch(html, /Email Verified|Authentication Successful/i);
+assert.doesNotMatch(html, /supabase-config|createClient|exchangeCodeForSession|verifyOtp|getSession/);
 assert.match(html, /href="login\.html"/);
 assert.match(html, /href="register\.html"/);
 assert.match(html, /href="index\.html"/);
