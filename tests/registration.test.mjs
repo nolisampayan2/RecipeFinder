@@ -99,7 +99,17 @@ assert.throws(
 );
 
 const registerHtml = await readFile(new URL('../register.html', import.meta.url), 'utf8');
-assert.doesNotMatch(registerHtml, /registration\.js|supabase-client\.js|supabase-config\.js|supabase-js/i);
+const sdkUrl = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js';
+const sdkIntegrity = 'sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK';
+const sdkTag = `<script src="${sdkUrl}" integrity="${sdkIntegrity}" crossorigin="anonymous" referrerpolicy="no-referrer"></script>`;
+assert.ok(registerHtml.includes(sdkTag), 'The registration page must use the exact approved SDK tag');
+assert.equal(registerHtml.split(sdkUrl).length - 1, 1, 'The registration page must load exactly one pinned SDK');
+assert.ok(
+  registerHtml.indexOf(sdkUrl) < registerHtml.indexOf('<script type="module" src="js/auth-ui.js"></script>'),
+  'The pinned SDK must load before the existing native module'
+);
+assert.doesNotMatch(registerHtml, /registration\.js|supabase-client\.js|supabase-config\.js/i);
+assert.doesNotMatch(registerHtml, /initializeSupabaseClient|createClient|signUp|signInWithPassword|exchangeCodeForSession/);
 
 const source = await readFile(new URL('../js/registration.js', import.meta.url), 'utf8');
 assert.doesNotMatch(source, /\bfetch\s*\(|XMLHttpRequest|WebSocket|localStorage|sessionStorage|console\./i);
