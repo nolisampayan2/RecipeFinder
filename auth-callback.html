@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="RecipeFinder email confirmation callback status.">
+  <title>Email confirmation — RecipeFinder</title>
+  <link rel="stylesheet" href="auth.css">
+</head>
+<body>
+  <a class="skip-link" href="#callback-content">Skip to confirmation status</a>
+  <div class="auth-shell">
+    <aside class="auth-visual" aria-label="RecipeFinder inspiration">
+      <a class="auth-brand" href="index.html" aria-label="RecipeFinder recipe discovery">
+        <span class="auth-brand-mark" aria-hidden="true">♨</span>
+        <span class="auth-brand-copy"><strong>Recipe<span>Finder</span></strong><small>DISCOVER · COOK · ENJOY</small></span>
+      </a>
+      <div class="visual-copy">
+        <p class="visual-kicker">Account confirmation</p>
+        <h1>A safer path back to <em>your recipes.</em></h1>
+        <p>This page is ready to handle email confirmation links once RecipeFinder authentication is explicitly connected.</p>
+      </div>
+      <small class="visual-credit">RecipeFinder visual prototype · Hero image generated for this project</small>
+    </aside>
+
+    <main class="auth-main" id="callback-content">
+      <section class="auth-card compact-card" aria-labelledby="callback-title">
+        <div class="verification-icon" aria-hidden="true" data-callback-icon>…</div>
+        <header class="auth-card-header">
+          <p class="auth-kicker" data-callback-kicker>Email confirmation</p>
+          <h1 id="callback-title" data-callback-title>Checking link</h1>
+          <p class="verification-copy" data-callback-message role="status" aria-live="polite" aria-atomic="true">Reviewing this confirmation link locally. No authentication request is being made.</p>
+        </header>
+        <div class="verification-callout" role="note"><strong>Authentication is not active yet.</strong> RecipeFinder will not confirm an email or create a session in this offline foundation.</div>
+        <div class="verification-actions">
+          <a class="auth-submit secondary-link" href="login.html">Return to sign in</a>
+          <a class="secondary-link" href="register.html">Create an account</a>
+        </div>
+        <a class="back-link" href="index.html">← Continue browsing recipes</a>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="js/auth-callback.js"></script>
+</body>
+</html>
