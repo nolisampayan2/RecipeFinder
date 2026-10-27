@@ -1,22 +1,79 @@
 import { categories, cuisines, recipes } from './data.js';
 import { filterRecipes } from './filters.js';
+import { safeImageUrl, setSafeText } from './security.js';
 import { state } from './state.js';
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
+function createElement(tagName, className, text) {
+  const element = document.createElement(tagName);
+  if (className) element.className = className;
+  if (text !== undefined) setSafeText(element, text);
+  return element;
+}
+
+function configureRecipeImage(image, recipe, className, alt = recipe.name) {
+  image.className = className;
+  image.alt = alt;
+  const source = safeImageUrl(recipe.image);
+  const fallback = safeImageUrl(recipe.fallbackImage);
+  if (source) image.src = source;
+  if (fallback) image.dataset.fallbackImage = fallback;
+  return image;
+}
+
 function recipeCard(recipe) {
   const saved = state.favorites.has(recipe.id);
-  const fallback = recipe.fallbackImage ? ` data-fallback-image="${recipe.fallbackImage}"` : '';
-  return `<article class="recipe-card" data-id="${recipe.id}"><img class="card-image" src="${recipe.image}"${fallback} alt="${recipe.name}" loading="lazy"><button class="heart ${saved ? 'saved' : ''}" data-favorite="${recipe.id}" aria-label="${saved ? 'Remove from' : 'Save to'} favorites">${saved ? '♥' : '♡'}</button><div class="card-body"><div class="tags"><span class="tag">${recipe.category}</span><span class="tag alt">${recipe.cuisine}</span></div><h3>${recipe.name}</h3><p>${recipe.description}</p><button class="view-btn" data-view="${recipe.id}">View recipe →</button></div></article>`;
+  const card = createElement('article', 'recipe-card');
+  card.dataset.id = recipe.id;
+
+  const image = configureRecipeImage(document.createElement('img'), recipe, 'card-image');
+  image.loading = 'lazy';
+  card.append(image);
+
+  const heart = createElement('button', `heart${saved ? ' saved' : ''}`, saved ? '♥' : '♡');
+  heart.type = 'button';
+  heart.dataset.favorite = recipe.id;
+  heart.setAttribute('aria-label', `${saved ? 'Remove from' : 'Save to'} favorites`);
+  card.append(heart);
+
+  const body = createElement('div', 'card-body');
+  const tags = createElement('div', 'tags');
+  tags.append(createElement('span', 'tag', recipe.category), createElement('span', 'tag alt', recipe.cuisine));
+  body.append(tags, createElement('h3', '', recipe.name), createElement('p', '', recipe.description));
+
+  const viewButton = createElement('button', 'view-btn', 'View recipe →');
+  viewButton.type = 'button';
+  viewButton.dataset.view = recipe.id;
+  body.append(viewButton);
+  card.append(body);
+  return card;
 }
 
 function renderFavorites() {
   const favorites = recipes.filter((recipe) => state.favorites.has(recipe.id));
   $('#fav-count').textContent = favorites.length;
-  $('#favorite-list').innerHTML = favorites.length
-    ? favorites.slice(0, 4).map((recipe) => `<div class="favorite-item"><img src="${recipe.image}" alt=""><div><strong>${recipe.name}</strong><small>${recipe.category}</small></div><button class="mini-remove" data-favorite="${recipe.id}" aria-label="Remove ${recipe.name}">×</button></div>`).join('')
-    : '<p class="empty-mini">No saved recipes yet. Tap a heart to keep one here.</p>';
+  const list = $('#favorite-list');
+  list.replaceChildren();
+  if (!favorites.length) {
+    list.append(createElement('p', 'empty-mini', 'No saved recipes yet. Tap a heart to keep one here.'));
+    return;
+  }
+
+  favorites.slice(0, 4).forEach((recipe) => {
+    const item = createElement('div', 'favorite-item');
+    item.append(configureRecipeImage(document.createElement('img'), recipe, '', ''));
+    const copy = document.createElement('div');
+    copy.append(createElement('strong', '', recipe.name), createElement('small', '', recipe.category));
+    item.append(copy);
+    const remove = createElement('button', 'mini-remove', '×');
+    remove.type = 'button';
+    remove.dataset.favorite = recipe.id;
+    remove.setAttribute('aria-label', `Remove ${recipe.name}`);
+    item.append(remove);
+    list.append(item);
+  });
 }
 
 export function render() {
@@ -33,8 +90,8 @@ export function render() {
       : '🍴 Recommended for you';
   $('#back-to-discover').hidden = !showingFullView;
   $('#recommended-view-all').hidden = showingFullView;
-  $('#recommended-grid').innerHTML = (showingFullView ? visibleRecipes : visibleRecipes.slice(0, 4)).map(recipeCard).join('');
-  $('#more-grid').innerHTML = showingFullView ? '' : visibleRecipes.slice(4).map(recipeCard).join('');
+  $('#recommended-grid').replaceChildren(...(showingFullView ? visibleRecipes : visibleRecipes.slice(0, 4)).map(recipeCard));
+  $('#more-grid').replaceChildren(...(showingFullView ? [] : visibleRecipes.slice(4).map(recipeCard)));
   $('#more-recipes').hidden = showingFullView;
   $('#empty-state').hidden = visibleRecipes.length > 0;
   $('#empty-title').textContent = state.view === 'favorites' ? 'No saved recipes yet' : 'No recipes found';
@@ -48,15 +105,33 @@ export function render() {
 }
 
 export function renderCategories() {
-  $('#category-row').innerHTML = categories.map(([name, emoji]) => {
+  const categoryButtons = categories.map(([name, emoji]) => {
     const recipe = recipes.find((item) => item.category === name);
-    const fallback = recipe?.fallbackImage ? ` data-fallback-image="${recipe.fallbackImage}"` : '';
-    return `<button class="category" data-filter="${name}"><img src="${recipe?.image || recipes[0].image}"${fallback} alt="" loading="lazy"><span>${emoji} ${name}</span></button>`;
-  }).join('');
+    const displayRecipe = recipe || recipes[0];
+    const button = createElement('button', 'category');
+    button.type = 'button';
+    button.dataset.filter = name;
+    const image = configureRecipeImage(document.createElement('img'), displayRecipe, '', '');
+    image.loading = 'lazy';
+    button.append(image, createElement('span', '', `${emoji} ${name}`));
+    return button;
+  });
+  $('#category-row').replaceChildren(...categoryButtons);
 }
 
 export function renderCuisines() {
-  $('#cuisine-list').innerHTML = cuisines.map(([name, flag]) => `<button class="cuisine" data-filter="${name}"><span>${flag}</span><strong>${name}</strong><i>Explore →</i></button>`).join('');
+  const cuisineButtons = cuisines.map(([name, flag]) => {
+    const button = createElement('button', 'cuisine');
+    button.type = 'button';
+    button.dataset.filter = name;
+    button.append(
+      createElement('span', '', flag),
+      createElement('strong', '', name),
+      createElement('i', '', 'Explore →'),
+    );
+    return button;
+  });
+  $('#cuisine-list').replaceChildren(...cuisineButtons);
 }
 
 export function showToast(message) {
@@ -70,8 +145,9 @@ export function showToast(message) {
 export function initializeImageFallbacks() {
   document.addEventListener('error', (event) => {
     const image = event.target;
-    if (!(image instanceof HTMLImageElement) || !image.dataset.fallbackImage) return;
-    if (image.getAttribute('src') === image.dataset.fallbackImage) return;
-    image.src = image.dataset.fallbackImage;
+    if (!(image instanceof HTMLImageElement)) return;
+    const fallback = safeImageUrl(image.dataset.fallbackImage);
+    if (!fallback || image.getAttribute('src') === fallback) return;
+    image.src = fallback;
   }, true);
 }
