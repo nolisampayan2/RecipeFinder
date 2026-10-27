@@ -8,7 +8,7 @@ export const SUPABASE_CLIENT_PROFILE = Object.freeze({
 });
 
 export const PKCE_STORAGE_REQUIREMENT =
-  'PKCE verifier persistence across an email round trip requires hosted browser verification before activation.';
+  'PKCE uses persistent browser storage for both the email-round-trip verifier and any resulting session; hosted behavior still requires real-browser verification before activation.';
 
 const CONTROL_OR_WHITESPACE = /[\u0000-\u0020\u007f]/;
 const PLACEHOLDER_VALUE = /YOUR_|PROJECT_REF|REPLACE_|<[^>]+>/i;
@@ -98,14 +98,15 @@ export function getSupabaseClientOptions(profile = SUPABASE_CLIENT_PROFILE.FOUND
 
   if (profile === SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION) {
     auth.flowType = 'pkce';
+    auth.persistSession = true;
   } else if (profile !== SUPABASE_CLIENT_PROFILE.FOUNDATION) {
     throw new SupabaseConfigurationError('Unknown Supabase client profile.');
   }
 
-  // persistSession controls normal session persistence. It does not prove that
-  // the PKCE verifier will survive the signup-to-email round trip in this app.
-  // No persistent storage is selected here until that behavior is approved and
-  // verified in a real browser against the hosted Auth configuration.
+  // In supabase-js v2.118.0, persistSession also selects persistent storage for
+  // the PKCE verifier. A later successful exchange may persist its session in
+  // that same storage, so this profile must remain isolated from public pages
+  // until the complete authentication lifecycle is explicitly approved.
   return Object.freeze({ auth: Object.freeze(auth) });
 }
 

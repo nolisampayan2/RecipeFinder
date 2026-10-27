@@ -26,7 +26,8 @@ assert.equal(
   SUPABASE_UMD_INTEGRITY,
   'sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK'
 );
-assert.match(PKCE_STORAGE_REQUIREMENT, /requires hosted browser verification/i);
+assert.match(PKCE_STORAGE_REQUIREMENT, /persistent browser storage/i);
+assert.match(PKCE_STORAGE_REQUIREMENT, /resulting session/i);
 assert.deepEqual(getSupabaseClientOptions(), {
   auth: {
     persistSession: false,
@@ -36,7 +37,7 @@ assert.deepEqual(getSupabaseClientOptions(), {
 });
 assert.deepEqual(getSupabaseClientOptions(SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION), {
   auth: {
-    persistSession: false,
+    persistSession: true,
     autoRefreshToken: false,
     detectSessionInUrl: false,
     flowType: 'pkce',
