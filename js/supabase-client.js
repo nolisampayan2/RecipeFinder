@@ -1,5 +1,14 @@
 export const SUPABASE_SDK_VERSION = '2.118.0';
 export const SUPABASE_UMD_URL = `https://cdn.jsdelivr.net/npm/@supabase/supabase-js@${SUPABASE_SDK_VERSION}/dist/umd/supabase.js`;
+export const SUPABASE_UMD_INTEGRITY = 'sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK';
+
+export const SUPABASE_CLIENT_PROFILE = Object.freeze({
+  FOUNDATION: 'foundation',
+  PKCE_PREPARATION: 'pkce-preparation',
+});
+
+export const PKCE_STORAGE_REQUIREMENT =
+  'PKCE verifier persistence across an email round trip requires hosted browser verification before activation.';
 
 const CONTROL_OR_WHITESPACE = /[\u0000-\u0020\u007f]/;
 const PLACEHOLDER_VALUE = /YOUR_|PROJECT_REF|REPLACE_|<[^>]+>/i;
@@ -80,7 +89,31 @@ export function validateSupabaseConfig(config) {
   });
 }
 
-export function initializeSupabaseClient(config, sdk = globalThis.supabase) {
+export function getSupabaseClientOptions(profile = SUPABASE_CLIENT_PROFILE.FOUNDATION) {
+  const auth = {
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
+  };
+
+  if (profile === SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION) {
+    auth.flowType = 'pkce';
+  } else if (profile !== SUPABASE_CLIENT_PROFILE.FOUNDATION) {
+    throw new SupabaseConfigurationError('Unknown Supabase client profile.');
+  }
+
+  // persistSession controls normal session persistence. It does not prove that
+  // the PKCE verifier will survive the signup-to-email round trip in this app.
+  // No persistent storage is selected here until that behavior is approved and
+  // verified in a real browser against the hosted Auth configuration.
+  return Object.freeze({ auth: Object.freeze(auth) });
+}
+
+export function initializeSupabaseClient(
+  config,
+  sdk = globalThis.supabase,
+  profile = SUPABASE_CLIENT_PROFILE.FOUNDATION
+) {
   const validated = validateSupabaseConfig(config);
 
   if (!sdk || typeof sdk.createClient !== 'function') {
@@ -89,11 +122,5 @@ export function initializeSupabaseClient(config, sdk = globalThis.supabase) {
     );
   }
 
-  return sdk.createClient(validated.url, validated.publishableKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-    },
-  });
+  return sdk.createClient(validated.url, validated.publishableKey, getSupabaseClientOptions(profile));
 }

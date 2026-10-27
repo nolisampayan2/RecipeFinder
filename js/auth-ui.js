@@ -1,4 +1,4 @@
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+import { isValidEmailAddress, validateRegistrationInput } from './registration.js';
 
 function setFieldError(form, name, message) {
   const input = form.elements.namedItem(name);
@@ -16,7 +16,7 @@ function valueOf(form, name) {
 
 function validateEmail(form) {
   const email = valueOf(form, 'email').trim();
-  const message = !email ? 'Enter your email address.' : !EMAIL_PATTERN.test(email) ? 'Enter a valid email address.' : '';
+  const message = !email ? 'Enter your email address.' : !isValidEmailAddress(email) ? 'Enter a valid email address.' : '';
   setFieldError(form, 'email', message);
   return !message;
 }
@@ -30,17 +30,15 @@ function validateLogin(form) {
 }
 
 function validateRegistration(form) {
-  const displayName = valueOf(form, 'displayName').trim();
-  const password = valueOf(form, 'password');
-  const confirmation = valueOf(form, 'confirmPassword');
-  const passwordValid = password.length >= 8 && /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password);
-  const emailValid = validateEmail(form);
+  const result = validateRegistrationInput({
+    displayName: valueOf(form, 'displayName'),
+    email: valueOf(form, 'email'),
+    password: valueOf(form, 'password'),
+    confirmPassword: valueOf(form, 'confirmPassword'),
+  });
 
-  setFieldError(form, 'displayName', displayName ? '' : 'Enter a display name.');
-  setFieldError(form, 'password', password ? (passwordValid ? '' : 'Use 8+ characters with uppercase, lowercase, and a number.') : 'Create a password.');
-  setFieldError(form, 'confirmPassword', !confirmation ? 'Confirm your password.' : confirmation !== password ? 'Passwords do not match.' : '');
-
-  return Boolean(displayName) && emailValid && passwordValid && confirmation === password;
+  Object.entries(result.errors).forEach(([name, message]) => setFieldError(form, name, message));
+  return result.valid;
 }
 
 function firstInvalidField(form) {
