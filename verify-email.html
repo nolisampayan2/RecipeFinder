@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Email verification preview for the RecipeFinder frontend prototype.">
+  <title>Verify your email — RecipeFinder</title>
+  <link rel="stylesheet" href="auth.css">
+</head>
+<body>
+  <a class="skip-link" href="#verification-content">Skip to verification preview</a>
+  <div class="auth-shell">
+    <aside class="auth-visual" aria-label="RecipeFinder inspiration">
+      <a class="auth-brand" href="index.html" aria-label="RecipeFinder recipe discovery">
+        <span class="auth-brand-mark" aria-hidden="true">♨</span>
+        <span class="auth-brand-copy"><strong>Recipe<span>Finder</span></strong><small>DISCOVER · COOK · ENJOY</small></span>
+      </a>
+      <div class="visual-copy">
+        <p class="visual-kicker">One careful step</p>
+        <h1>Secure access, served with <em>peace of mind.</em></h1>
+        <p>Email confirmation will protect RecipeFinder accounts once hosted authentication is connected.</p>
+      </div>
+      <small class="visual-credit">RecipeFinder visual prototype · Hero image generated for this project</small>
+    </aside>
+
+    <main class="auth-main" id="verification-content">
+      <section class="auth-card compact-card" aria-labelledby="verification-title">
+        <div class="verification-icon" aria-hidden="true">✉</div>
+        <header class="auth-card-header">
+          <p class="auth-kicker">Visual preview</p>
+          <h1 id="verification-title">Email confirmation will be required</h1>
+          <p class="verification-copy">After Supabase Auth is integrated, new users will need to confirm their email before account features become available.</p>
+        </header>
+        <div class="verification-callout" role="note"><strong>No email has been sent.</strong> This screen is a frontend-only preview. Resend and confirmation-link handling will be implemented and tested in a later batch.</div>
+        <div class="verification-actions">
+          <a class="auth-submit secondary-link" href="login.html">Return to sign in</a>
+          <a class="secondary-link" href="register.html">Back to registration</a>
+        </div>
+        <a class="back-link" href="index.html">← Continue browsing recipes</a>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
