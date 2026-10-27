@@ -20,6 +20,7 @@ const fakeSdk = Object.freeze({
         autoRefreshToken: false,
         detectSessionInUrl: false,
         flowType: 'pkce',
+        skipAutoInitialize: true,
       },
     });
     return fakeClient;

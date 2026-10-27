@@ -41,6 +41,7 @@ assert.deepEqual(getSupabaseClientOptions(SUPABASE_CLIENT_PROFILE.PKCE_PREPARATI
     autoRefreshToken: false,
     detectSessionInUrl: false,
     flowType: 'pkce',
+    skipAutoInitialize: true,
   },
 });
 assert.equal('storage' in getSupabaseClientOptions(SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION).auth, false);

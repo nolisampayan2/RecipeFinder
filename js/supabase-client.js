@@ -99,14 +99,15 @@ export function getSupabaseClientOptions(profile = SUPABASE_CLIENT_PROFILE.FOUND
   if (profile === SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION) {
     auth.flowType = 'pkce';
     auth.persistSession = true;
+    auth.skipAutoInitialize = true;
   } else if (profile !== SUPABASE_CLIENT_PROFILE.FOUNDATION) {
     throw new SupabaseConfigurationError('Unknown Supabase client profile.');
   }
 
-  // In supabase-js v2.118.0, persistSession also selects persistent storage for
-  // the PKCE verifier. A later successful exchange may persist its session in
-  // that same storage, so this profile must remain isolated from public pages
-  // until the complete authentication lifecycle is explicitly approved.
+  // In supabase-js v2.118.0, persistSession selects persistent storage for the
+  // PKCE verifier and any resulting session. skipAutoInitialize prevents client
+  // construction from recovering that storage; a later Auth method can still
+  // initialize lazily and therefore requires separate approval.
   return Object.freeze({ auth: Object.freeze(auth) });
 }
 

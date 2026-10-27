@@ -6,9 +6,45 @@ import {
   createRegistrationService,
   validateRegistrationInput,
 } from '../js/registration.js';
-import { prepareRegistrationPkceClient } from '../js/registration-browser.js';
+import { createRegistrationClientActivation } from '../js/registration-browser.js';
 
-assert.equal(typeof prepareRegistrationPkceClient, 'function', 'The inert browser import seam must resolve');
+assert.equal(typeof createRegistrationClientActivation, 'function', 'The inert browser import seam must resolve');
+
+const offlinePublicConfig = Object.freeze({
+  url: 'https://recipefinder-test.supabase.co',
+  publishableKey: 'sb_publishable_test_abcdefghijklmnopqrstuvwxyz',
+});
+let browserClientCreations = 0;
+const offlineBrowserClient = Object.freeze({ auth: Object.freeze({}) });
+const offlineSdk = Object.freeze({
+  createClient(url, key, options) {
+    browserClientCreations += 1;
+    assert.equal(url, offlinePublicConfig.url);
+    assert.equal(key, offlinePublicConfig.publishableKey);
+    assert.equal(options.auth.skipAutoInitialize, true);
+    return offlineBrowserClient;
+  },
+});
+
+assert.equal(browserClientCreations, 0, 'Importing the live entrypoint must not create a client');
+const activation = createRegistrationClientActivation({ config: offlinePublicConfig, sdk: offlineSdk });
+assert.equal(browserClientCreations, 0, 'Creating an activation context must remain inert');
+assert.equal(activation.activate(), offlineBrowserClient);
+assert.equal(activation.activate(), offlineBrowserClient);
+assert.equal(browserClientCreations, 1, 'One activation context must create at most one client');
+
+assert.throws(
+  () => createRegistrationClientActivation({ config: offlinePublicConfig }).activate(),
+  /is not loaded/i
+);
+assert.throws(
+  () => createRegistrationClientActivation({
+    config: { ...offlinePublicConfig, publishableKey: 'service_role_forbidden_browser_key' },
+    sdk: offlineSdk,
+  }).activate(),
+  /forbidden/i
+);
+assert.equal(browserClientCreations, 1, 'Rejected activation must not reach the SDK');
 
 const validInput = Object.freeze({
   displayName: '  Test Cook  ',
@@ -124,8 +160,8 @@ const source = await readFile(new URL('../js/registration.js', import.meta.url),
 assert.doesNotMatch(source, /\bfetch\s*\(|XMLHttpRequest|WebSocket|localStorage|sessionStorage|console\./i);
 
 const browserSource = await readFile(new URL('../js/registration-browser.js', import.meta.url), 'utf8');
-assert.match(browserSource, /createPkceBrowserInitializer as prepareRegistrationPkceClient/);
-assert.doesNotMatch(browserSource, /supabase-config\.js|\.initialize\s*\(|createClient\s*\(|signUp\s*\(|signInWithPassword|exchangeCodeForSession|getSession|onAuthStateChange/);
+assert.match(browserSource, /createRegistrationClientActivation/);
+assert.doesNotMatch(browserSource, /supabase-config\.js|createClient\s*\(|signUp\s*\(|signInWithPassword|exchangeCodeForSession|getSession|onAuthStateChange/);
 assert.doesNotMatch(browserSource, /localStorage|sessionStorage|location\.(?:search|hash)|URLSearchParams|addEventListener|console\./);
 
 console.log('Offline registration preparation tests passed with fake clients only.');
