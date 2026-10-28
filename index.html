@@ -53,6 +53,15 @@
         <a class="guest" href="login.html" aria-label="Sign in to RecipeFinder"><span aria-hidden="true">👩🏽‍🍳</span><strong>Guest</strong><i aria-hidden="true">→</i></a>
       </header>
 
+      <div class="live-search-preview" aria-labelledby="mealdb-search-label">
+        <button id="mealdb-search-button" type="button" aria-describedby="mealdb-search-disclosure mealdb-search-unavailable" disabled>Search TheMealDB</button>
+        <div>
+          <strong id="mealdb-search-label">Future live recipe search</strong>
+          <p id="mealdb-search-disclosure">Searching TheMealDB sends your search term to an external recipe service.</p>
+          <small id="mealdb-search-unavailable">Live search is not yet available. The control is disabled for this offline preview.</small>
+        </div>
+      </div>
+
       <main id="main-content">
         <section class="hero" id="home" aria-labelledby="hero-title">
           <div class="hero-copy">

@@ -12,6 +12,13 @@ const EXTERNAL_ERROR_MESSAGES = Object.freeze({
   invalid: 'Offline recipe preview data could not be used safely.',
   unavailable: 'Offline recipe previews could not be loaded. Try again.',
 });
+const LIVE_ERROR_MESSAGES = Object.freeze({
+  timeout: 'TheMealDB took too long to respond. Try again.',
+  network: 'TheMealDB is temporarily unavailable. Try again.',
+  service: 'TheMealDB could not complete this search. Try again later.',
+  invalid: 'TheMealDB returned recipe data that could not be used safely.',
+  unavailable: 'TheMealDB results could not be loaded. Try again.',
+});
 
 function createElement(tagName, className, text) {
   const element = document.createElement(tagName);
@@ -42,6 +49,7 @@ function configureRecipeImage(image, recipe, className, alt = recipe.name) {
 
 function recipeCard(recipe) {
   const isExternal = recipe.source === 'external';
+  const isLiveMealDb = isExternal && recipe.externalProvider === 'themealdb';
   const hasOfflineDetails = isExternal
     && recipe.externalProvider === 'fictional-offline'
     && /^external:fictional-offline:\d+$/.test(recipe.id);
@@ -53,17 +61,21 @@ function recipeCard(recipe) {
   image.loading = 'lazy';
   card.append(image);
 
-  const heart = createElement('button', `heart${saved ? ' saved' : ''}`, saved ? '♥' : '♡');
-  heart.type = 'button';
-  heart.dataset.favorite = recipe.id;
-  heart.setAttribute('aria-label', `${saved ? 'Remove from' : 'Save to'} favorites`);
-  card.append(heart);
+  if (!isLiveMealDb) {
+    const heart = createElement('button', `heart${saved ? ' saved' : ''}`, saved ? '♥' : '♡');
+    heart.type = 'button';
+    heart.dataset.favorite = recipe.id;
+    heart.setAttribute('aria-label', `${saved ? 'Remove from' : 'Save to'} favorites`);
+    card.append(heart);
+  }
 
   const body = createElement('div', 'card-body');
-  if (isExternal) body.append(createElement('span', 'recipe-source', 'Offline recipe preview'));
+  if (isExternal) body.append(createElement('span', 'recipe-source', isLiveMealDb ? 'TheMealDB recipe' : 'Offline recipe preview'));
   const tags = createElement('div', 'tags');
   tags.append(createElement('span', 'tag', recipe.category), createElement('span', 'tag alt', recipe.cuisine));
-  const description = recipe.description || (isExternal ? 'Recipe details are reserved for a later offline preview.' : '');
+  const description = recipe.description || (isLiveMealDb
+    ? 'Live recipe details are not available in this preview.'
+    : isExternal ? 'Recipe details are reserved for a later offline preview.' : '');
   body.append(tags, createElement('h3', '', recipe.name), createElement('p', '', description));
 
   const viewButton = createElement('button', 'view-btn', 'View recipe →');
@@ -72,9 +84,9 @@ function recipeCard(recipe) {
     viewButton.dataset.externalView = recipe.id;
     viewButton.setAttribute('aria-label', `View offline details for ${recipe.name}`);
   } else if (isExternal) {
-    setSafeText(viewButton, 'Preview only');
+    setSafeText(viewButton, isLiveMealDb ? 'Details unavailable' : 'Preview only');
     viewButton.disabled = true;
-    viewButton.setAttribute('aria-label', `${recipe.name} details are not available in this preview`);
+    viewButton.setAttribute('aria-label', `${recipe.name} details are not available${isLiveMealDb ? ' for this live result' : ' in this preview'}`);
   } else {
     viewButton.dataset.view = recipe.id;
   }
@@ -160,6 +172,7 @@ function renderExternalStatus(externalState) {
   const discoverMore = $('#discover-more-recipes');
   const recommended = $('#recommended');
   const currentStatus = externalState?.status || 'idle';
+  const isLiveMealDb = externalState?.provider === 'themealdb';
   const showingAll = state.view === 'all';
   const discoverLabels = {
     idle: 'Discover More Offline Recipes',
@@ -175,7 +188,14 @@ function renderExternalStatus(externalState) {
   discoverMore.textContent = discoverLabels[currentStatus] || discoverLabels.error;
   discoverMore.setAttribute('aria-disabled', String(currentStatus !== 'idle'));
 
-  if (currentStatus === 'loading') message.textContent = 'Checking the offline recipe preview collection...';
+  if (isLiveMealDb && currentStatus === 'loading') message.textContent = 'Searching TheMealDB...';
+  else if (isLiveMealDb && currentStatus === 'ready') {
+    const count = externalState.recipes.length;
+    message.textContent = `${count} TheMealDB recipe${count === 1 ? '' : 's'} found. Results provided by TheMealDB.`;
+  } else if (isLiveMealDb && currentStatus === 'empty') message.textContent = 'No TheMealDB recipes matched this search.';
+  else if (isLiveMealDb && currentStatus === 'error') {
+    message.textContent = LIVE_ERROR_MESSAGES[externalState.error?.code] || LIVE_ERROR_MESSAGES.unavailable;
+  } else if (currentStatus === 'loading') message.textContent = 'Checking the offline recipe preview collection...';
   else if (currentStatus === 'ready') {
     const count = externalState.recipes.length;
     message.textContent = `${count} offline recipe preview${count === 1 ? '' : 's'} added.`;
@@ -188,7 +208,9 @@ function renderExternalStatus(externalState) {
 export function render(catalog = recipeCatalog, externalState = null) {
   const favoriteEntries = catalog.resolveFavoriteIds(state.favorites);
   const filteredRecipes = catalog.filter(state.query, state.filter);
-  const visibleRecipes = state.view === 'favorites'
+  const visibleRecipes = externalState?.provider === 'themealdb' && state.view !== 'favorites'
+    ? externalState.recipes
+    : state.view === 'favorites'
     ? favoriteEntries.filter(({ resolved }) => resolved).map(({ recipe }) => recipe)
     : filteredRecipes;
   const showingFullView = state.view === 'all' || state.view === 'favorites';

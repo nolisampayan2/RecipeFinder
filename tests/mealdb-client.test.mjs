@@ -33,6 +33,8 @@ assert.deepEqual(await client.listAreas(), [{ strArea: 'Fictionland' }]);
 assert.equal(new URL(requests.at(-1).url).searchParams.get('a'), 'list');
 assert.ok(requests.every(({ url }) => new URL(url).origin === 'https://www.themealdb.com'));
 assert.ok(requests.every(({ options }) => options.method === 'GET' && options.headers.Accept === 'application/json'));
+assert.ok(requests.every(({ options }) => options.credentials === 'omit'));
+assert.ok(requests.every(({ options }) => options.referrerPolicy === 'no-referrer'));
 
 const emptyClient = createMealDbClient({ fetchImpl: async () => jsonResponse({ meals: null }) });
 assert.deepEqual(await emptyClient.search('nothing'), []);

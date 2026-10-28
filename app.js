@@ -187,6 +187,10 @@ function updateThemeToggle(dark) {
 }
 
 function initializeSearch() {
+  const liveSearchButton = $('#mealdb-search-button');
+  liveSearchButton.disabled = true;
+  liveSearchButton.setAttribute('aria-disabled', 'true');
+
   $('#search-form').addEventListener('submit', (event) => {
     event.preventDefault();
     resetExternalDiscovery();

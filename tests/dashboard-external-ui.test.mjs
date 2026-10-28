@@ -120,8 +120,11 @@ assert.match(appSource, /section === 'categories' \|\| link\.dataset\.section ==
 const initializeAppBody = appSource.match(/function initializeApp\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
 assert.doesNotMatch(initializeAppBody, /discoverExternalRecipes/, 'Page initialization must not start discovery');
 assert.doesNotMatch(appSource, /createMealDbClient|mealdb-client|fetch\(|supabase-config|localStorage.*external/i);
+assert.match(appSource, /mealdb-search-button/);
 assert.match(renderSource, /Offline recipe preview/);
 assert.match(renderSource, /fictional-offline/);
+assert.match(renderSource, /TheMealDB recipe/);
+assert.match(renderSource, /Results provided by TheMealDB/);
 assert.match(renderSource, /dataset\.externalView/);
 assert.match(renderSource, /viewButton\.disabled = true/);
 assert.match(renderSource, /discoverMore\.hidden = !showingAll/);
@@ -131,8 +134,12 @@ assert.doesNotMatch(renderSource, /\.innerHTML\s*=|insertAdjacentHTML/);
 assert.match(html, /id="external-status"[^>]+aria-live="polite"/);
 assert.match(html, /data-external-retry/);
 assert.match(html, /id="discover-more-recipes"[^>]+data-discover-more[^>]+hidden/);
+assert.match(html, /id="mealdb-search-button"[^>]+disabled/);
+assert.match(html, /Searching TheMealDB sends your search term to an external recipe service\./);
+assert.match(html, /Live search is not yet available/);
 assert.match(css, /\.external-status/);
 assert.match(css, /\.external-preview/);
+assert.match(css, /\.live-search-preview/);
 assert.match(css, /\.recipe-view-actions\{[^}]*flex-wrap:wrap/);
 
 const discoverMoreSource = appSource.match(/function discoverMoreRecipes\(\)[\s\S]*?\n\}/)?.[0] || '';
@@ -258,6 +265,24 @@ const fictionalDetailButton = fictionalCard.children.at(-1).children.at(-1);
 assert.equal(fictionalDetailButton.dataset.externalView, allPreviewRecipes[0].id);
 assert.equal(fictionalDetailButton.dataset.view, undefined);
 assert.notEqual(fictionalDetailButton.disabled, true, 'Validated fictional details must be available');
+
+const liveRecipe = {
+  id: 'external:themealdb:12345', source: 'external', externalProvider: 'themealdb', externalId: '12345',
+  detailLevel: 'full', name: 'Safe Live Fixture', category: 'Vegetarian', cuisine: 'Fictionland',
+  image: '', description: '', ingredients: [['Ingredient', '1 cup']], instructions: 'Prepare safely.', tutorial: '',
+};
+favoriteState.view = 'default';
+renderModule.render(recipeCatalog.withRecipes([liveRecipe]), {
+  provider: 'themealdb', status: 'ready', recipes: [liveRecipe], error: null, generation: 7,
+});
+const liveCard = fakeElements.get('#recommended-grid').children[0];
+assert.equal(liveCard.dataset.id, liveRecipe.id);
+assert.equal(liveCard.children.some((child) => child.className.includes('heart')), false, 'Live recipes must not expose favorites');
+const liveBody = liveCard.children.at(-1);
+assert.equal(liveBody.children[0].textContent, 'TheMealDB recipe');
+assert.equal(liveBody.children.at(-1).disabled, true, 'Live details must remain unavailable');
+assert.equal(liveBody.children.at(-1).dataset.externalView, undefined);
+assert.match(fakeElements.get('#external-status-message').textContent, /Results provided by TheMealDB/);
 
 renderModule.render(recipeCatalog, { status: 'empty', recipes: [], error: null, generation: 2 });
 assert.equal(discoverAction.textContent, 'No More Offline Recipes');

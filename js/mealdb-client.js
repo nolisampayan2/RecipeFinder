@@ -98,6 +98,8 @@ async function requestJson(fetchImpl, timeoutMs, url, externalSignal) {
       response = await fetchImpl(url.href, {
         method: 'GET',
         headers: { Accept: 'application/json' },
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer',
         signal: controller.signal,
       });
     } catch (error) {
