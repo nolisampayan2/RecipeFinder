@@ -1,5 +1,5 @@
-import { categories, cuisines, recipes } from './data.js';
-import { filterRecipes } from './filters.js';
+import { categories, cuisines } from './data.js';
+import { recipeCatalog } from './recipe-catalog.js';
 import { safeImageUrl, setSafeText } from './security.js';
 import { state } from './state.js';
 
@@ -52,7 +52,9 @@ function recipeCard(recipe) {
 }
 
 function renderFavorites() {
-  const favorites = recipes.filter((recipe) => state.favorites.has(recipe.id));
+  const favorites = recipeCatalog.resolveFavoriteIds(state.favorites)
+    .filter(({ resolved }) => resolved)
+    .map(({ recipe }) => recipe);
   $('#fav-count').textContent = favorites.length;
   const list = $('#favorite-list');
   list.replaceChildren();
@@ -77,9 +79,11 @@ function renderFavorites() {
 }
 
 export function render() {
-  const filteredRecipes = filterRecipes(recipes, state.query, state.filter);
+  const filteredRecipes = recipeCatalog.filter(state.query, state.filter);
   const visibleRecipes = state.view === 'favorites'
-    ? recipes.filter((recipe) => state.favorites.has(recipe.id))
+    ? recipeCatalog.resolveFavoriteIds(state.favorites)
+      .filter(({ resolved }) => resolved)
+      .map(({ recipe }) => recipe)
     : filteredRecipes;
   const showingFullView = state.view === 'all' || state.view === 'favorites';
 
@@ -105,6 +109,7 @@ export function render() {
 }
 
 export function renderCategories() {
+  const recipes = recipeCatalog.list();
   const categoryButtons = categories.map(([name, emoji]) => {
     const recipe = recipes.find((item) => item.category === name);
     const displayRecipe = recipe || recipes[0];

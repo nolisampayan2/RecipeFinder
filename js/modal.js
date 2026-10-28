@@ -1,4 +1,4 @@
-import { recipes } from './data.js';
+import { recipeCatalog } from './recipe-catalog.js';
 import { safeExternalUrl, safeImageUrl, setSafeText } from './security.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -11,7 +11,7 @@ function createElement(tagName, className, text) {
 }
 
 export function openRecipe(id) {
-  const recipe = recipes.find((item) => item.id === id);
+  const recipe = recipeCatalog.getById(id);
   if (!recipe) return;
   const image = createElement('img', 'modal-hero');
   image.alt = recipe.name;

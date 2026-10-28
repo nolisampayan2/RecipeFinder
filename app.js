@@ -1,4 +1,4 @@
-import { recipes } from './js/data.js';
+import { recipeCatalog } from './js/recipe-catalog.js';
 import { applyStoredTheme, clearFilters, state, toggleFavorite, toggleTheme } from './js/state.js';
 import { initializeImageFallbacks, render, renderCategories, renderCuisines, showToast } from './js/render.js';
 import { closeRecipeModal, openRecipe } from './js/modal.js';
@@ -152,6 +152,7 @@ function initializePageActions() {
     }
 
     if (event.target.closest('.surprise-btn')) {
+      const recipes = recipeCatalog.list();
       const randomRecipe = recipes[Math.floor(Math.random() * recipes.length)];
       openRecipe(randomRecipe.id);
     }
