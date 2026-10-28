@@ -14,7 +14,7 @@ const source = createFictionalExternalRecipeSource();
 assert.equal(fetchCalls, 0);
 
 const mutableFixture = [{
-  id: 'external:themealdb:991000',
+  id: 'external:fictional-offline:991000',
   name: 'Mutable Fictional Fixture',
   category: 'Vegetarian',
   cuisine: 'Italian',
@@ -32,17 +32,17 @@ assert.throws(
 );
 
 const searchResults = await source.search('citrus');
-assert.deepEqual(searchResults.map(({ id }) => id), ['external:themealdb:990002']);
+assert.deepEqual(searchResults.map(({ id }) => id), ['external:fictional-offline:990002']);
 assert.equal(searchResults[0].detailLevel, 'full');
 assert.equal(searchResults[0].externalProvider, 'fictional-offline');
 assert.equal(searchResults[0].image, 'assets/recipefinder-favicon.svg');
 const categoryResults = await source.filterCategory('Vegetarian');
 assert.equal(categoryResults[0].detailLevel, 'summary');
 assert.deepEqual(categoryResults[0].ingredients, []);
-assert.equal((await source.filterCuisine('Italian'))[0].id, 'external:themealdb:990006');
-assert.equal((await source.getDetails('external:themealdb:990001')).detailLevel, 'full');
-await assert.rejects(source.getDetails('external:themealdb:1'), (error) => error.code === 'NOT_FOUND');
-await assert.rejects(source.getDetails('unsafe-id'), /valid external recipe ID/);
+assert.equal((await source.filterCuisine('Italian'))[0].id, 'external:fictional-offline:990006');
+assert.equal((await source.getDetails('external:fictional-offline:990001')).detailLevel, 'full');
+await assert.rejects(source.getDetails('external:fictional-offline:1'), (error) => error.code === 'NOT_FOUND');
+await assert.rejects(source.getDetails('unsafe-id'), /valid fictional recipe ID/);
 
 const cancelled = new AbortController();
 cancelled.abort();
@@ -62,8 +62,8 @@ const allPreviews = await controller.discoverAll();
 assert.equal(allPreviews.status, 'ready');
 assert.equal(allPreviews.recipes.length, 6);
 assert.deepEqual(allPreviews.recipes.map(({ id }) => id), [
-  'external:themealdb:990001', 'external:themealdb:990002', 'external:themealdb:990003',
-  'external:themealdb:990004', 'external:themealdb:990005', 'external:themealdb:990006',
+  'external:fictional-offline:990001', 'external:fictional-offline:990002', 'external:fictional-offline:990003',
+  'external:fictional-offline:990004', 'external:fictional-offline:990005', 'external:fictional-offline:990006',
 ]);
 const pendingSearch = controller.search('citrus');
 assert.equal(controller.getState().status, 'loading');

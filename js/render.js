@@ -44,7 +44,7 @@ function recipeCard(recipe) {
   const isExternal = recipe.source === 'external';
   const hasOfflineDetails = isExternal
     && recipe.externalProvider === 'fictional-offline'
-    && /^external:themealdb:\d+$/.test(recipe.id);
+    && /^external:fictional-offline:\d+$/.test(recipe.id);
   const saved = state.favorites.has(recipe.id);
   const card = createElement('article', `recipe-card${isExternal ? ' external-preview' : ''}`);
   card.dataset.id = recipe.id;

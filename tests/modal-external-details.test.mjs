@@ -47,7 +47,7 @@ assert.equal(fakeDocument.activeElement, elements['.modal-close']);
 assert.match(JSON.stringify(elements['#modal-content']), /Loading recipe details/);
 assert.match(JSON.stringify(elements['#modal-content']), /aria-live/);
 
-const fictional = await createFictionalExternalRecipeSource().getDetails('external:themealdb:990001');
+const fictional = await createFictionalExternalRecipeSource().getDetails('external:fictional-offline:990001');
 assert.equal(modal.openRecipeDetails(fictional), true);
 assert.equal(fakeDocument.activeElement, elements['.modal-close'], 'Async success must not move focus again');
 const rendered = JSON.stringify(elements['#modal-content']);
@@ -95,8 +95,8 @@ modal.openRecipeLoading(trigger);
 assert.doesNotThrow(() => modal.closeRecipeModal());
 
 const appSource = fs.readFileSync(new URL('../app.js', import.meta.url), 'utf8');
-assert.match(appSource, /externalRecipeController\.getDetails\(id\)/);
-assert.match(appSource, /externalRecipeController\.invalidateDetails\(\)/);
+assert.match(appSource, /externalSourceRegistry\.getDetails\(id\)/);
+assert.match(appSource, /externalSourceRegistry\.invalidateDetails\(\)/);
 assert.match(appSource, /externalDetailGeneration/);
 assert.match(appSource, /handleRecipeModalTab\(event\)/);
 assert.match(appSource, /openDemoRecipe\(viewButton\.dataset\.view, viewButton\)/);
@@ -110,7 +110,7 @@ function extractFunction(name) {
 }
 
 const lifecycleFactory = Function(
-  'externalRecipeController', 'openRecipeLoading', 'openRecipeDetails', 'openRecipeError',
+  'externalSourceRegistry', 'openRecipeLoading', 'openRecipeDetails', 'openRecipeError',
   'isRecipeModalOpen', 'closeRecipeModal', 'openRecipe',
   `let externalDetailGeneration = 0;
    ${extractFunction('invalidateExternalDetails')}
@@ -134,7 +134,7 @@ function createLifecycleHarness() {
   const requests = [];
   const events = [];
   let modalOpen = false;
-  const controller = {
+  const registry = {
     invalidateDetails() { events.push('invalidate'); },
     getDetails(id) {
       const request = deferred();
@@ -143,7 +143,7 @@ function createLifecycleHarness() {
     },
   };
   const actions = lifecycleFactory(
-    controller,
+    registry,
     () => { modalOpen = true; events.push('loading'); },
     (recipe) => { events.push(`external:${recipe.id}`); },
     () => { events.push('error'); },
@@ -155,32 +155,32 @@ function createLifecycleHarness() {
 }
 
 const demoRace = createLifecycleHarness();
-const pendingBeforeDemo = demoRace.actions.openExternalRecipe('external:themealdb:990001', trigger);
+const pendingBeforeDemo = demoRace.actions.openExternalRecipe('external:fictional-offline:990001', trigger);
 demoRace.actions.openDemoRecipe('lemon-chicken', trigger);
 demoRace.requests[0].resolve(fictional);
 await pendingBeforeDemo;
 assert.equal(demoRace.events.at(-1), 'demo:lemon-chicken', 'Late fictional details must not overwrite a newer demo');
 
 const secondSelection = createLifecycleHarness();
-const firstPending = secondSelection.actions.openExternalRecipe('external:themealdb:990001', trigger);
-const secondPending = secondSelection.actions.openExternalRecipe('external:themealdb:990002', trigger);
+const firstPending = secondSelection.actions.openExternalRecipe('external:fictional-offline:990001', trigger);
+const secondPending = secondSelection.actions.openExternalRecipe('external:fictional-offline:990002', trigger);
 secondSelection.requests[0].resolve(fictional);
 await firstPending;
-const secondRecipe = { ...fictional, id: 'external:themealdb:990002', name: 'Second fictional recipe' };
+const secondRecipe = { ...fictional, id: 'external:fictional-offline:990002', name: 'Second fictional recipe' };
 secondSelection.requests[1].resolve(secondRecipe);
 await secondPending;
-assert.equal(secondSelection.events.at(-1), 'external:external:themealdb:990002');
-assert.equal(secondSelection.events.includes('external:external:themealdb:990001'), false);
+assert.equal(secondSelection.events.at(-1), 'external:external:fictional-offline:990002');
+assert.equal(secondSelection.events.includes('external:external:fictional-offline:990001'), false);
 
 const closeRace = createLifecycleHarness();
-const pendingBeforeClose = closeRace.actions.openExternalRecipe('external:themealdb:990001', trigger);
+const pendingBeforeClose = closeRace.actions.openExternalRecipe('external:fictional-offline:990001', trigger);
 closeRace.actions.closeActiveRecipeModal();
 closeRace.requests[0].resolve(fictional);
 await pendingBeforeClose;
 assert.equal(closeRace.events.at(-1), 'close', 'Close must prevent late detail rendering');
 
 const navigationRace = createLifecycleHarness();
-const pendingBeforeNavigation = navigationRace.actions.openExternalRecipe('external:themealdb:990001', trigger);
+const pendingBeforeNavigation = navigationRace.actions.openExternalRecipe('external:fictional-offline:990001', trigger);
 navigationRace.actions.invalidateExternalDetails({ closeModal: true, restoreFocus: false });
 navigationRace.requests[0].resolve(fictional);
 await pendingBeforeNavigation;

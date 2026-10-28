@@ -64,8 +64,22 @@ function requireSignal(signal) {
   return signal;
 }
 
-export function createExternalRecipeController({ source } = {}) {
+function requireIdentityParser(parser) {
+  if (typeof parser !== 'function') {
+    throw new ExternalRecipeControllerError('INVALID_IDENTITY_PARSER', 'An identity parser function is required.');
+  }
+  return (id) => {
+    const identity = parser(id);
+    if (!identity || typeof identity !== 'object' || identity.id !== id || typeof identity.id !== 'string') {
+      throw new ExternalRecipeControllerError('INVALID_ID', 'A valid external recipe ID is required.');
+    }
+    return identity;
+  };
+}
+
+export function createExternalRecipeController({ source, parseIdentity = parseMealDbRecipeId } = {}) {
   const recipeSource = requireSource(source);
+  const identityParser = requireIdentityParser(parseIdentity);
   let generation = 0;
   let collectionController = null;
   let state = Object.freeze({ status: 'idle', recipes: Object.freeze([]), error: null, generation });
@@ -122,7 +136,7 @@ export function createExternalRecipeController({ source } = {}) {
   const getDetails = (id) => {
     let identity;
     try {
-      identity = parseMealDbRecipeId(id);
+      identity = identityParser(id);
     } catch {
       return Promise.reject(new ExternalRecipeControllerError('INVALID_ID', 'A valid external recipe ID is required.'));
     }
@@ -167,7 +181,7 @@ export function createExternalRecipeController({ source } = {}) {
       pendingDetails.clear();
       return;
     }
-    const identity = parseMealDbRecipeId(id);
+    const identity = identityParser(id);
     pendingDetails.get(identity.id)?.controller.abort();
     pendingDetails.delete(identity.id);
   };
@@ -181,7 +195,7 @@ export function createExternalRecipeController({ source } = {}) {
     getDetails,
     getCachedDetails(id) {
       try {
-        return detailCache.get(parseMealDbRecipeId(id).id) ?? null;
+        return detailCache.get(identityParser(id).id) ?? null;
       } catch {
         return null;
       }

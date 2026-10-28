@@ -12,19 +12,23 @@ import {
 } from './js/modal.js';
 import { initializeCategoryCarousel, toggleCategoriesExpansion } from './js/category-carousel.js';
 import { createFictionalExternalRecipeController } from './js/fictional-external-recipe-source.js';
+import { createExternalSourceRegistry } from './js/external-source-registry.js';
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const MOBILE_SIDEBAR_QUERY = '(max-width: 980px)';
 const mobileSidebarQuery = matchMedia(MOBILE_SIDEBAR_QUERY);
 const externalRecipeController = createFictionalExternalRecipeController();
+const externalSourceRegistry = createExternalSourceRegistry({
+  controllers: { 'fictional-offline': externalRecipeController },
+});
 let dashboardCatalog = recipeCatalog;
 let lastExternalOperation = null;
 let externalDetailGeneration = 0;
 
 function invalidateExternalDetails({ closeModal = false, restoreFocus = false } = {}) {
   externalDetailGeneration += 1;
-  externalRecipeController.invalidateDetails();
+  externalSourceRegistry.invalidateDetails();
   if (closeModal) closeRecipeModal({ restoreFocus });
 }
 
@@ -43,7 +47,7 @@ async function openExternalRecipe(id, trigger) {
   const generation = externalDetailGeneration;
   openRecipeLoading(trigger);
   try {
-    const recipe = await externalRecipeController.getDetails(id);
+    const recipe = await externalSourceRegistry.getDetails(id);
     if (generation !== externalDetailGeneration || !isRecipeModalOpen()) return;
     if (recipe?.id === id && recipe.detailLevel === 'full') {
       openRecipeDetails(recipe);

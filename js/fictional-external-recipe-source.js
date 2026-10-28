@@ -1,45 +1,54 @@
 import { createExternalRecipeController } from './external-recipe-controller.js';
 
 const DISCOVER_ALL_QUERY = 'recipefinder:discover-all-offline-previews';
+const FICTIONAL_RECIPE_ID = /^external:fictional-offline:(\d+)$/;
+const FICTIONAL_SUFFIXES = Object.freeze(['990001', '990002', '990003', '990004', '990005', '990006']);
+
+export const LEGACY_FICTIONAL_RECIPE_ID_MAP = Object.freeze(Object.fromEntries(
+  FICTIONAL_SUFFIXES.map((suffix) => [
+    `external:themealdb:${suffix}`,
+    `external:fictional-offline:${suffix}`,
+  ]),
+));
 
 const FICTIONAL_RECIPES = Object.freeze([
   {
-    id: 'external:themealdb:990001', externalId: '990001', name: 'Aurora Garden Couscous',
+    id: 'external:fictional-offline:990001', externalId: '990001', name: 'Aurora Garden Couscous',
     category: 'Vegetarian', cuisine: 'Mediterranean',
     description: 'A fictional offline couscous preview with roasted vegetables and herbs.',
     ingredients: [['Couscous', '1 cup'], ['Roasted vegetables', '2 cups'], ['Fresh herbs', '1 handful']],
     instructions: 'Prepare the couscous, fold in the vegetables, and finish with herbs.',
   },
   {
-    id: 'external:themealdb:990002', externalId: '990002', name: 'Midnight Citrus Noodles',
+    id: 'external:fictional-offline:990002', externalId: '990002', name: 'Midnight Citrus Noodles',
     category: 'Pasta', cuisine: 'Japanese',
     description: 'A fictional offline noodle preview brightened with citrus and sesame.',
     ingredients: [['Noodles', '250 g'], ['Citrus juice', '3 tbsp'], ['Sesame', '1 tbsp']],
     instructions: 'Cook the noodles, toss with citrus dressing, and sprinkle with sesame.',
   },
   {
-    id: 'external:themealdb:990003', externalId: '990003', name: 'Ember Lime Chicken',
+    id: 'external:fictional-offline:990003', externalId: '990003', name: 'Ember Lime Chicken',
     category: 'Chicken', cuisine: 'Mexican',
     description: 'A fictional offline chicken preview with charred lime and mild spices.',
     ingredients: [['Chicken', '500 g'], ['Lime', '2'], ['Mild spices', '2 tsp']],
     instructions: 'Season the chicken, grill until cooked, and finish with lime.',
   },
   {
-    id: 'external:themealdb:990004', externalId: '990004', name: 'Cocoa Pear Tart',
+    id: 'external:fictional-offline:990004', externalId: '990004', name: 'Cocoa Pear Tart',
     category: 'Dessert', cuisine: 'French',
     description: 'A fictional offline tart preview pairing cocoa pastry with ripe pear.',
     ingredients: [['Pear', '2'], ['Cocoa pastry', '1 shell'], ['Vanilla', '1 tsp']],
     instructions: 'Arrange pears in the pastry shell and bake until tender.',
   },
   {
-    id: 'external:themealdb:990005', externalId: '990005', name: 'Coastal Sesame Rice Bowl',
+    id: 'external:fictional-offline:990005', externalId: '990005', name: 'Coastal Sesame Rice Bowl',
     category: 'Seafood', cuisine: 'American',
     description: 'A fictional offline seafood bowl preview with rice and sesame greens.',
     ingredients: [['White fish', '300 g'], ['Rice', '2 cups'], ['Sesame greens', '1 cup']],
     instructions: 'Cook the fish, arrange over rice, and add sesame greens.',
   },
   {
-    id: 'external:themealdb:990006', externalId: '990006', name: 'Sunrise Tomato Toast',
+    id: 'external:fictional-offline:990006', externalId: '990006', name: 'Sunrise Tomato Toast',
     category: 'Breakfast', cuisine: 'Italian',
     description: 'A fictional offline breakfast preview with tomatoes and crisp toast.',
     ingredients: [['Bread', '4 slices'], ['Tomatoes', '3'], ['Basil', '1 handful']],
@@ -70,6 +79,7 @@ function immutableRecipe(recipe) {
     throw new TypeError('Each fictional recipe must be an object.');
   }
   const id = requireText(recipe.id, 'recipe ID');
+  parseFictionalRecipeId(id);
   const ingredients = Array.isArray(recipe.ingredients)
     ? recipe.ingredients.map((pair) => Object.freeze(Array.isArray(pair) ? [...pair] : []))
     : [];
@@ -124,7 +134,7 @@ export function createFictionalExternalRecipeSource({ recipes = FICTIONAL_RECIPE
     async getDetails(id, { signal } = {}) {
       checkSignal(signal);
       const normalizedId = requireText(id, 'id');
-      if (!/^external:themealdb:\d+$/.test(normalizedId)) throw new TypeError('A valid external recipe ID is required.');
+      if (!FICTIONAL_RECIPE_ID.test(normalizedId)) throw new TypeError('A valid fictional recipe ID is required.');
       const recipe = records.find((item) => item.id === normalizedId);
       if (!recipe) throw Object.assign(new Error('Fictional recipe not found.'), { code: 'NOT_FOUND' });
       return recipe;
@@ -132,8 +142,17 @@ export function createFictionalExternalRecipeSource({ recipes = FICTIONAL_RECIPE
   });
 }
 
+export function parseFictionalRecipeId(value) {
+  const match = typeof value === 'string' ? FICTIONAL_RECIPE_ID.exec(value) : null;
+  if (!match) throw new TypeError('A valid fictional recipe ID is required.');
+  return Object.freeze({ id: value, externalId: match[1], provider: 'fictional-offline' });
+}
+
 export function createFictionalExternalRecipeController(options) {
-  const controller = createExternalRecipeController({ source: createFictionalExternalRecipeSource(options) });
+  const controller = createExternalRecipeController({
+    source: createFictionalExternalRecipeSource(options),
+    parseIdentity: parseFictionalRecipeId,
+  });
   return Object.freeze({
     ...controller,
     discoverAll: (requestOptions) => controller.search(DISCOVER_ALL_QUERY, requestOptions),

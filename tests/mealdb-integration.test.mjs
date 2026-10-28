@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createExternalRecipeController } from '../js/external-recipe-controller.js';
+import { parseFictionalRecipeId } from '../js/fictional-external-recipe-source.js';
 import { createMealDbRecipeSource } from '../js/mealdb-recipe-source.js';
 
 const fullMeal = (id, name = `Fictional Meal ${id}`) => ({
@@ -38,6 +39,26 @@ const client = {
   async lookup(value, options) { calls.push(['lookup', value, options]); return [fullMeal(value)]; },
 };
 const source = createMealDbRecipeSource({ client });
+
+assert.throws(
+  () => createExternalRecipeController({ source, parseIdentity: null }),
+  (error) => error.code === 'INVALID_IDENTITY_PARSER',
+);
+const fictionalParserController = createExternalRecipeController({
+  source: {
+    ...source,
+    getDetails: async (id) => ({ id, externalId: '990001', detailLevel: 'full', ingredients: [] }),
+  },
+  parseIdentity: parseFictionalRecipeId,
+});
+assert.equal(
+  (await fictionalParserController.getDetails('external:fictional-offline:990001')).id,
+  'external:fictional-offline:990001',
+);
+await assert.rejects(
+  fictionalParserController.getDetails('external:themealdb:990001'),
+  (error) => error.code === 'INVALID_ID',
+);
 assert.equal((await source.search('fictional'))[0].detailLevel, 'full');
 assert.deepEqual(calls.at(-1).slice(0, 2), ['search', 'fictional']);
 const categoryResult = await source.filterCategory('Fictional Category');
