@@ -14,7 +14,7 @@ const fullFixture = {
   strMeal: hostileName,
   strCategory: 'Fictional Stew',
   strArea: 'Test Kitchen',
-  strMealThumb: 'https://images.example.test/meal.jpg',
+  strMealThumb: 'https://www.themealdb.com/images/media/meals/fixture.jpg',
   strInstructions: '<script>fictional()</script> Stir safely.',
   strYoutube: 'https://www.youtube.com/watch?v=fictional',
 };
@@ -34,6 +34,7 @@ assert.equal(full.description, '', 'The normalizer must not invent a description
 assert.equal(full.ingredients.length, 20);
 assert.deepEqual(full.ingredients[19], ['Ingredient 20', '']);
 assert.equal(full.instructions, '<script>fictional()</script> Stir safely.');
+assert.equal(full.image, 'https://www.themealdb.com/images/media/meals/fixture.jpg');
 assert.equal(full.tutorial, 'https://www.youtube.com/watch?v=fictional');
 assert.deepEqual(fullFixture, snapshot, 'Normalization must not mutate its fixture input');
 
@@ -55,8 +56,27 @@ const unsafe = normalizeFullMeal({
 assert.equal(unsafe.image, '');
 assert.equal(unsafe.tutorial, '');
 
+for (const [image, tutorial] of [
+  ['http://www.themealdb.com/images/media/meals/insecure.jpg', 'http://www.youtube.com/watch?v=insecure'],
+  ['https://themealdb.com.evil.test/images/media/meals/deceptive.jpg', 'https://youtube.com.evil.test/watch?v=deceptive'],
+  ['https://user@www.themealdb.com/images/media/meals/userinfo.jpg', 'https://user@www.youtube.com/watch?v=userinfo'],
+  ['https://www.themealdb.com/not-images/fixture.jpg', 'https://www.youtube.com/profile'],
+  ['assets/local-image.png', '/local-tutorial'],
+]) {
+  const rejected = normalizeFullMeal({ idMeal: '90999', strMeal: 'Rejected Media Fixture', strMealThumb: image, strYoutube: tutorial });
+  assert.equal(rejected.image, '');
+  assert.equal(rejected.tutorial, '');
+}
+
+assert.equal(normalizeFullMeal({
+  idMeal: '90998',
+  strMeal: 'Short Tutorial Fixture',
+  strMealThumb: 'https://themealdb.com/images/media/meals/allowed.jpg',
+  strYoutube: 'https://youtu.be/fictional',
+}).tutorial, 'https://youtu.be/fictional');
+
 const summary = normalizeMealSummary(
-  { idMeal: '90004', strMeal: 'Summary Fixture', strMealThumb: 'https://images.example.test/summary.jpg' },
+  { idMeal: '90004', strMeal: 'Summary Fixture', strMealThumb: 'https://www.themealdb.com/images/media/meals/summary.jpg' },
   { category: 'Fictional Category', cuisine: 'Fictional Area' },
 );
 assert.equal(summary.detailLevel, 'summary');
@@ -83,7 +103,7 @@ assert.throws(
 const categoriesFixture = [{
   idCategory: '12',
   strCategory: 'Fictional Category',
-  strCategoryThumb: 'https://images.example.test/category.png',
+  strCategoryThumb: 'https://www.themealdb.com/images/media/categories/fixture.png',
   strCategoryDescription: '<b>Plain description data</b>',
 }];
 const categoriesSnapshot = structuredClone(categoriesFixture);
@@ -93,7 +113,7 @@ assert.deepEqual(normalizeCategories(categoriesFixture), [{
   externalProvider: 'themealdb',
   externalId: '12',
   name: 'Fictional Category',
-  image: 'https://images.example.test/category.png',
+  image: 'https://www.themealdb.com/images/media/categories/fixture.png',
   description: '<b>Plain description data</b>',
 }]);
 assert.deepEqual(categoriesFixture, categoriesSnapshot);

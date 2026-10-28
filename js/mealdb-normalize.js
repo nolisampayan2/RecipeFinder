@@ -1,7 +1,7 @@
-import { safeExternalUrl, safeImageUrl } from './security.js';
-
 const PROVIDER = 'themealdb';
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+const MEALDB_IMAGE_HOSTS = new Set(['themealdb.com', 'www.themealdb.com']);
+const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']);
 
 function text(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -38,6 +38,36 @@ function recipeIdentity(id) {
   return `external:${PROVIDER}:${id}`;
 }
 
+function approvedHttpsUrl(value, allowedHosts, pathAllowed = () => true) {
+  const candidate = text(value);
+  if (!candidate || CONTROL_CHARACTERS.test(candidate)) return '';
+  try {
+    const url = new URL(candidate);
+    if (
+      url.protocol !== 'https:'
+      || url.username
+      || url.password
+      || (url.port && url.port !== '443')
+      || !allowedHosts.has(url.hostname.toLowerCase())
+      || !pathAllowed(url)
+    ) return '';
+    return url.href;
+  } catch {
+    return '';
+  }
+}
+
+function mealDbImageUrl(value) {
+  return approvedHttpsUrl(value, MEALDB_IMAGE_HOSTS, (url) => url.pathname.startsWith('/images/'));
+}
+
+function youtubeTutorialUrl(value) {
+  return approvedHttpsUrl(value, YOUTUBE_HOSTS, (url) => {
+    if (url.hostname.toLowerCase() === 'youtu.be') return url.pathname.length > 1;
+    return url.pathname === '/watch' || url.pathname.startsWith('/shorts/') || url.pathname.startsWith('/embed/');
+  });
+}
+
 function ingredientsFrom(meal) {
   const ingredients = [];
   for (let index = 1; index <= 20; index += 1) {
@@ -64,7 +94,7 @@ function recipeBase(meal, detailLevel, context = {}) {
     name,
     category,
     cuisine,
-    image: safeImageUrl(meal.strMealThumb),
+    image: mealDbImageUrl(meal.strMealThumb),
     description: '',
   };
 }
@@ -75,7 +105,7 @@ export function normalizeFullMeal(meal) {
     ...normalized,
     ingredients: ingredientsFrom(meal),
     instructions: text(meal.strInstructions),
-    tutorial: safeExternalUrl(meal.strYoutube),
+    tutorial: youtubeTutorialUrl(meal.strYoutube),
   };
 }
 
@@ -116,7 +146,7 @@ export function normalizeCategories(categories) {
       externalProvider: PROVIDER,
       externalId: id,
       name: requiredText(category.strCategory, 'strCategory'),
-      image: safeImageUrl(category.strCategoryThumb),
+      image: mealDbImageUrl(category.strCategoryThumb),
       description: text(category.strCategoryDescription),
     };
   });
