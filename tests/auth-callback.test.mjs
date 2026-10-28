@@ -8,7 +8,9 @@ import {
   cleanCallbackUrl,
   createPkceConfirmationController,
   initializeAuthCallback,
+  prepareAuthCallbackRequest,
   renderCallbackView,
+  takePreparedAuthCallbackRequest,
 } from '../js/auth-callback.js';
 import {
   CALLBACK_CLIENT_STATE,
@@ -128,6 +130,39 @@ assert.equal(
 assert.deepEqual(replacements, [[null, '', '/RecipeFinder/auth-callback.html']]);
 assert.equal(JSON.stringify(replacements).includes(secret), false, 'URL cleanup must not retain callback secrets');
 
+const mutablePreparationLocation = {
+  href: `${callback}?code=${secret}`,
+  pathname: '/RecipeFinder/auth-callback.html',
+  search: `?code=${secret}`,
+  hash: '',
+};
+const preparedCallback = prepareAuthCallbackRequest(mutablePreparationLocation, {
+  replaceState() {
+    mutablePreparationLocation.href = callback;
+    mutablePreparationLocation.search = '';
+  },
+});
+assert.deepEqual(preparedCallback, { kind: 'pkce', authorizationCode: secret, scrubbed: true });
+assert.equal(mutablePreparationLocation.href, callback, 'The URL must be cleaned after the code is captured');
+
+for (const invalidUrl of [
+  `${callback}?code=one&code=two`,
+  `${callback}?code=one&token_hash=two&type=email`,
+  `${callback}?token_hash=${secret}&type=email`,
+  `${callback}#access_token=${secret}&refresh_token=${secret}`,
+]) {
+  const parsed = new URL(invalidUrl);
+  const prepared = prepareAuthCallbackRequest({
+    href: parsed.href,
+    pathname: parsed.pathname,
+    search: parsed.search,
+    hash: parsed.hash,
+  }, { replaceState() {} });
+  assert.notEqual(prepared.kind, 'pkce');
+  assert.equal(prepared.authorizationCode, '');
+  assert.equal(prepared.scrubbed, true);
+}
+
 function callbackContext(url) {
   const parsed = new URL(url);
   const cleanupCalls = [];
@@ -156,8 +191,9 @@ const confirmationController = createPkceConfirmationController({
     return { data: { session: { access_token: 'fake-session-value' } }, error: null };
   },
 });
-const firstProcessing = confirmationController.process(validContext.context);
-const duplicateProcessing = confirmationController.process(validContext.context);
+const preparedValidCallback = prepareAuthCallbackRequest(validContext.context.location, validContext.context.history);
+const firstProcessing = confirmationController.process({ preparedCallback: preparedValidCallback });
+const duplicateProcessing = confirmationController.process({ preparedCallback: preparedValidCallback });
 assert.equal(firstProcessing, duplicateProcessing, 'Concurrent processing must reuse one promise');
 assert.deepEqual(await firstProcessing, {
   status: CONFIRMATION_STATUS.CONFIRMED,
@@ -258,6 +294,8 @@ assert.equal(initializeAuthCallback(initializationOptions), true);
 assert.equal(initializeAuthCallback(initializationOptions), false, 'Callback initialization must run only once');
 assert.deepEqual(initializationReplacements, [[null, '', '/RecipeFinder/auth-callback.html']]);
 assert.equal(JSON.stringify(initializationReplacements).includes('evil.example'), false, 'Unsafe return destinations must be discarded');
+assert.deepEqual(takePreparedAuthCallbackRequest(), { kind: 'pkce', authorizationCode: secret, scrubbed: true });
+assert.equal(takePreparedAuthCallbackRequest(), null, 'The live prepared callback must be consumable only once');
 
 const source = await readFile(new URL('../js/auth-callback.js', import.meta.url), 'utf8');
 assert.doesNotMatch(source, /exchangeCodeForSession|verifyOtp|setSession|signUp|signIn|\bfetch\s*\(|XMLHttpRequest|WebSocket/i);
@@ -274,9 +312,14 @@ const browserSource = await readFile(new URL('../js/auth-callback-browser.js', i
 assert.match(browserSource, /createPkceBrowserInitializer/);
 assert.match(browserSource, /import\('\.\/supabase-config\.js'\)/, 'The ignored config must be loaded only at runtime');
 assert.doesNotMatch(browserSource, /^import\s+.*supabase-config\.js/m, 'The ignored config must not be a static import');
-assert.doesNotMatch(browserSource, /createPkceConfirmationController|exchangeCodeForSession|verifyOtp|getSession|signUp|signInWithPassword|onAuthStateChange/);
+assert.doesNotMatch(browserSource, /verifyOtp|getSession|signUp|signInWithPassword|onAuthStateChange/);
 assert.doesNotMatch(browserSource, /\bfetch\s*\(|XMLHttpRequest|WebSocket|localStorage|sessionStorage|console\./);
 assert.doesNotMatch(browserSource, /globalThis\.[A-Za-z_$][\w$]*\s*=|window\.[A-Za-z_$][\w$]*\s*=/, 'Client state must not be exposed globally');
+assert.equal(
+  browserSource.match(/createManualLoginConfirmationOrchestration\s*\(/g)?.length,
+  1,
+  'The manual-login orchestration must be declared but never invoked by page load'
+);
 
 const renderedText = JSON.stringify([...nodes.values()].map((node) => node.textContent));
 assert.equal(renderedText.includes(secret), false);

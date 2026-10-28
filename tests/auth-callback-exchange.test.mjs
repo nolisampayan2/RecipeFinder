@@ -4,8 +4,10 @@ import {
   CONFIRMATION_MESSAGES,
   CONFIRMATION_STATUS,
   createPkceConfirmationController,
+  prepareAuthCallbackRequest,
 } from '../js/auth-callback.js';
 import { createPkceCodeExchangeAdapter } from '../js/auth-callback-exchange.js';
+import { createManualLoginConfirmationOrchestration } from '../js/auth-callback-browser.js';
 
 const callback = 'http://localhost/RecipeFinder/auth-callback.html';
 const fakeCode = 'offline-fake-authorization-code';
@@ -102,8 +104,9 @@ const context = {
   },
   history: { replaceState: (...args) => cleanupCalls.push(args) },
 };
-const firstProcessing = controller.process(context);
-const duplicateProcessing = controller.process(context);
+const integratedPreparedCallback = prepareAuthCallbackRequest(context.location, context.history);
+const firstProcessing = controller.process({ preparedCallback: integratedPreparedCallback });
+const duplicateProcessing = controller.process({ preparedCallback: integratedPreparedCallback });
 assert.equal(firstProcessing, duplicateProcessing, 'The controller must retain duplicate-exchange protection');
 assert.deepEqual(await firstProcessing, {
   status: CONFIRMATION_STATUS.CONFIRMED,
@@ -113,18 +116,117 @@ assert.equal(integratedExchangeCalls, 1);
 assert.equal(cleanupObservedBeforeExchange, true);
 assert.deepEqual(cleanupCalls, [[null, '', '/RecipeFinder/auth-callback.html']]);
 
+const orchestrationEvents = [];
+const orchestrationPreparedCallback = prepareAuthCallbackRequest({
+  href: `${callback}?code=${fakeCode}`,
+  pathname: '/RecipeFinder/auth-callback.html',
+  search: `?code=${fakeCode}`,
+  hash: '',
+}, {
+  replaceState() { orchestrationEvents.push('cleaned'); },
+});
+let signOutCalls = 0;
+const manualLoginOrchestration = createManualLoginConfirmationOrchestration({
+  client: {
+    auth: {
+      async exchangeCodeForSession(code) {
+        orchestrationEvents.push('exchanged');
+        assert.equal(code, fakeCode);
+        return {
+          data: { session: { access_token: fakeAccessToken, refresh_token: fakeRefreshToken } },
+          error: null,
+        };
+      },
+      async signOut(options) {
+        signOutCalls += 1;
+        orchestrationEvents.push('signed-out');
+        assert.deepEqual(options, { scope: 'local' });
+        return { error: null };
+      },
+    },
+  },
+  preparedCallback: orchestrationPreparedCallback,
+});
+const firstActivation = manualLoginOrchestration.activate();
+const duplicateActivation = manualLoginOrchestration.activate();
+assert.equal(firstActivation, duplicateActivation, 'Orchestration activation must reuse one promise');
+assert.deepEqual(await firstActivation, {
+  status: CONFIRMATION_STATUS.CONFIRMED,
+  message: CONFIRMATION_MESSAGES.CONFIRMED,
+});
+assert.deepEqual(orchestrationEvents, ['cleaned', 'exchanged', 'signed-out']);
+assert.equal(signOutCalls, 1);
+
+let exchangeFailureSignOutCalls = 0;
+const exchangeFailureOrchestration = createManualLoginConfirmationOrchestration({
+  client: {
+    auth: {
+      exchangeCodeForSession: async () => ({ data: null, error: true }),
+      signOut: async () => {
+        exchangeFailureSignOutCalls += 1;
+        return { error: null };
+      },
+    },
+  },
+  preparedCallback: orchestrationPreparedCallback,
+});
+assert.deepEqual(await exchangeFailureOrchestration.activate(), {
+  status: CONFIRMATION_STATUS.UNAVAILABLE,
+  message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+});
+assert.equal(exchangeFailureSignOutCalls, 0, 'A failed exchange must not attempt session cleanup');
+
+for (const failingClient of [
+  null,
+  { auth: {} },
+  { auth: { exchangeCodeForSession: async () => ({ data: null, error: true }) } },
+  {
+    auth: {
+      exchangeCodeForSession: async () => ({
+        data: { session: { access_token: fakeAccessToken, refresh_token: fakeRefreshToken } },
+        error: null,
+      }),
+      signOut: async () => ({ error: new Error('offline sign-out failure') }),
+    },
+  },
+  {
+    auth: {
+      exchangeCodeForSession: async () => ({
+        data: { session: { access_token: fakeAccessToken, refresh_token: fakeRefreshToken } },
+        error: null,
+      }),
+      signOut: async () => { throw new Error('offline sign-out exception'); },
+    },
+  },
+]) {
+  const orchestration = createManualLoginConfirmationOrchestration({
+    client: failingClient,
+    preparedCallback: orchestrationPreparedCallback,
+  });
+  assert.deepEqual(await orchestration.activate(), {
+    status: CONFIRMATION_STATUS.UNAVAILABLE,
+    message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+  });
+}
+
 const adapterSource = await readFile(new URL('../js/auth-callback-exchange.js', import.meta.url), 'utf8');
 assert.doesNotMatch(adapterSource, /console\.|localStorage|sessionStorage|\bfetch\s*\(|XMLHttpRequest|WebSocket/);
 assert.doesNotMatch(adapterSource, /supabase-config|createClient|getSession|onAuthStateChange|verifyOtp|signUp|signInWithPassword/);
 
 for (const liveModule of [
   '../js/auth-callback.js',
-  '../js/auth-callback-browser.js',
   '../auth-callback.html',
 ]) {
   const source = await readFile(new URL(liveModule, import.meta.url), 'utf8');
   assert.doesNotMatch(source, /auth-callback-exchange|createPkceCodeExchangeAdapter/, `${liveModule} must not activate the adapter`);
 }
+
+const callbackBrowserSource = await readFile(new URL('../js/auth-callback-browser.js', import.meta.url), 'utf8');
+assert.equal(
+  callbackBrowserSource.match(/createManualLoginConfirmationOrchestration\s*\(/g)?.length,
+  1,
+  'The manual-login orchestration must be declared but never invoked by page load'
+);
 
 const combinedSafeOutput = JSON.stringify({
   safeSuccess,

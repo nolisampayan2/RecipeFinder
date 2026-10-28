@@ -73,25 +73,31 @@ export function cleanCallbackUrl(locationLike, historyLike) {
   return true;
 }
 
+export function prepareAuthCallbackRequest(locationLike, historyLike) {
+  const classification = classifyAuthCallback(locationLike?.href);
+  let authorizationCode = '';
+
+  if (classification.kind === 'pkce') {
+    try {
+      authorizationCode = new URL(locationLike.href).searchParams.get('code')?.trim() || '';
+    } catch {
+      authorizationCode = '';
+    }
+  }
+
+  const scrubbed = cleanCallbackUrl(locationLike, historyLike);
+  return Object.freeze({ kind: classification.kind, authorizationCode, scrubbed });
+}
+
 export function createPkceConfirmationController({ exchangeAuthorizationCode } = {}) {
   let processingPromise;
 
   return Object.freeze({
-    process({ location, history } = {}) {
+    process({ preparedCallback, location, history } = {}) {
       if (processingPromise) return processingPromise;
 
-      const classification = classifyAuthCallback(location?.href);
-      let authorizationCode = '';
-      if (classification.kind === 'pkce') {
-        try {
-          authorizationCode = new URL(location.href).searchParams.get('code')?.trim() || '';
-        } catch {
-          authorizationCode = '';
-        }
-      }
-
-      const scrubbed = cleanCallbackUrl(location, history);
-      if (!scrubbed || classification.kind !== 'pkce' || !authorizationCode) {
+      const callbackRequest = preparedCallback || prepareAuthCallbackRequest(location, history);
+      if (!callbackRequest.scrubbed || callbackRequest.kind !== 'pkce' || !callbackRequest.authorizationCode) {
         processingPromise = Promise.resolve(Object.freeze({
           status: CONFIRMATION_STATUS.UNAVAILABLE,
           message: CONFIRMATION_MESSAGES.UNAVAILABLE,
@@ -108,7 +114,7 @@ export function createPkceConfirmationController({ exchangeAuthorizationCode } =
       }
 
       processingPromise = Promise.resolve()
-        .then(() => exchangeAuthorizationCode(authorizationCode))
+        .then(() => exchangeAuthorizationCode(callbackRequest.authorizationCode))
         .then((result) => Object.freeze(!result || typeof result !== 'object' || result.error || !result.data
           ? { status: CONFIRMATION_STATUS.UNAVAILABLE, message: CONFIRMATION_MESSAGES.UNAVAILABLE }
           : { status: CONFIRMATION_STATUS.CONFIRMED, message: CONFIRMATION_MESSAGES.CONFIRMED }))
@@ -155,14 +161,20 @@ export function renderCallbackView(root, view) {
 }
 
 let initialized = false;
+let livePreparedCallbackRequest = null;
+
+export function takePreparedAuthCallbackRequest() {
+  const preparedCallback = livePreparedCallbackRequest;
+  livePreparedCallbackRequest = null;
+  return preparedCallback;
+}
 
 export function initializeAuthCallback({ location = globalThis.location, history = globalThis.history, document = globalThis.document } = {}) {
   if (initialized || !location || !history || !document) return false;
   initialized = true;
 
-  const classification = classifyAuthCallback(location.href);
-  cleanCallbackUrl(location, history);
-  renderCallbackView(document, callbackView(classification.kind));
+  livePreparedCallbackRequest = prepareAuthCallbackRequest(location, history);
+  renderCallbackView(document, callbackView(livePreparedCallbackRequest.kind));
   return true;
 }
 
