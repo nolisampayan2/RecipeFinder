@@ -10,7 +10,11 @@ import {
   initializeAuthCallback,
   renderCallbackView,
 } from '../js/auth-callback.js';
-import { createCallbackClientInitialization } from '../js/auth-callback-browser.js';
+import {
+  CALLBACK_CLIENT_STATE,
+  createCallbackClientInitialization,
+  createCallbackPageInitialization,
+} from '../js/auth-callback-browser.js';
 
 const callback = 'http://localhost/RecipeFinder/auth-callback.html';
 const secret = 'sensitive-test-value';
@@ -58,6 +62,48 @@ assert.throws(
   /configuration is missing/i
 );
 assert.equal(callbackClientCreations, 1, 'Rejected callback initialization must not reach the SDK');
+
+let callbackConfigLoads = 0;
+const readinessRoot = { dataset: {} };
+const callbackPageInitialization = createCallbackPageInitialization({
+  loadConfig: async () => {
+    callbackConfigLoads += 1;
+    return { SUPABASE_CONFIG: offlinePublicConfig };
+  },
+  sdk: offlineSdk,
+  root: readinessRoot,
+});
+const firstPageInitialization = callbackPageInitialization.initialize();
+const secondPageInitialization = callbackPageInitialization.initialize();
+assert.equal(firstPageInitialization, secondPageInitialization, 'Callback page initialization must reuse one promise');
+assert.equal(await firstPageInitialization, CALLBACK_CLIENT_STATE.READY);
+assert.equal(callbackConfigLoads, 1, 'The ignored configuration module must be requested once per callback context');
+assert.equal(callbackClientCreations, 2, 'Callback page initialization must construct exactly one additional client');
+assert.equal(readinessRoot.dataset.supabaseClientState, CALLBACK_CLIENT_STATE.READY);
+
+for (const unavailableCase of [
+  {
+    name: 'missing configuration module',
+    loadConfig: async () => { throw new Error('offline missing-module fixture'); },
+    sdk: offlineSdk,
+  },
+  {
+    name: 'missing SDK',
+    loadConfig: async () => ({ SUPABASE_CONFIG: offlinePublicConfig }),
+    sdk: undefined,
+  },
+  {
+    name: 'invalid configuration',
+    loadConfig: async () => ({ SUPABASE_CONFIG: { ...offlinePublicConfig, url: 'http://unsafe.example' } }),
+    sdk: offlineSdk,
+  },
+]) {
+  const root = { dataset: {} };
+  const unavailableInitialization = createCallbackPageInitialization({ ...unavailableCase, root });
+  assert.equal(await unavailableInitialization.initialize(), CALLBACK_CLIENT_STATE.UNAVAILABLE, unavailableCase.name);
+  assert.equal(root.dataset.supabaseClientState, CALLBACK_CLIENT_STATE.UNAVAILABLE, unavailableCase.name);
+}
+assert.equal(callbackClientCreations, 2, 'Failed callback page initialization must not reach the SDK');
 
 assert.deepEqual(classifyAuthCallback(`${callback}?code=${secret}`), { kind: 'pkce' });
 assert.deepEqual(classifyAuthCallback(callback), { kind: 'none' });
@@ -226,13 +272,11 @@ assert.doesNotMatch(source, /supabase-client|supabase-browser|supabase-config|cr
 
 const browserSource = await readFile(new URL('../js/auth-callback-browser.js', import.meta.url), 'utf8');
 assert.match(browserSource, /createPkceBrowserInitializer/);
-assert.doesNotMatch(browserSource, /supabase-config|createPkceConfirmationController|exchangeCodeForSession|verifyOtp|getSession|signUp|signInWithPassword|onAuthStateChange/);
+assert.match(browserSource, /import\('\.\/supabase-config\.js'\)/, 'The ignored config must be loaded only at runtime');
+assert.doesNotMatch(browserSource, /^import\s+.*supabase-config\.js/m, 'The ignored config must not be a static import');
+assert.doesNotMatch(browserSource, /createPkceConfirmationController|exchangeCodeForSession|verifyOtp|getSession|signUp|signInWithPassword|onAuthStateChange/);
 assert.doesNotMatch(browserSource, /\bfetch\s*\(|XMLHttpRequest|WebSocket|localStorage|sessionStorage|console\./);
-assert.equal(
-  browserSource.match(/createCallbackClientInitialization\s*\(/g)?.length,
-  1,
-  'The callback initializer must be declared but never invoked by its live module'
-);
+assert.doesNotMatch(browserSource, /globalThis\.[A-Za-z_$][\w$]*\s*=|window\.[A-Za-z_$][\w$]*\s*=/, 'Client state must not be exposed globally');
 
 const renderedText = JSON.stringify([...nodes.values()].map((node) => node.textContent));
 assert.equal(renderedText.includes(secret), false);
