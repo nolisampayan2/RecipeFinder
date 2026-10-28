@@ -121,6 +121,8 @@ const initializeAppBody = appSource.match(/function initializeApp\(\) \{([\s\S]*
 assert.doesNotMatch(initializeAppBody, /discoverExternalRecipes/, 'Page initialization must not start discovery');
 assert.doesNotMatch(appSource, /createMealDbClient|mealdb-client|fetch\(|supabase-config|localStorage.*external/i);
 assert.match(renderSource, /Offline recipe preview/);
+assert.match(renderSource, /fictional-offline/);
+assert.match(renderSource, /dataset\.externalView/);
 assert.match(renderSource, /viewButton\.disabled = true/);
 assert.match(renderSource, /discoverMore\.hidden = !showingAll/);
 assert.match(renderSource, /aria-disabled/);
@@ -251,6 +253,11 @@ assert.deepEqual(
   'All Recipes must keep demo-first ordering without duplicate IDs',
 );
 assert.equal(new Set(fakeElements.get('#recommended-grid').children.map((card) => card.dataset.id)).size, originalDemoIds.length + 6);
+const fictionalCard = fakeElements.get('#recommended-grid').children[originalDemoIds.length];
+const fictionalDetailButton = fictionalCard.children.at(-1).children.at(-1);
+assert.equal(fictionalDetailButton.dataset.externalView, allPreviewRecipes[0].id);
+assert.equal(fictionalDetailButton.dataset.view, undefined);
+assert.notEqual(fictionalDetailButton.disabled, true, 'Validated fictional details must be available');
 
 renderModule.render(recipeCatalog, { status: 'empty', recipes: [], error: null, generation: 2 });
 assert.equal(discoverAction.textContent, 'No More Offline Recipes');

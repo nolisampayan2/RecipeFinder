@@ -42,6 +42,9 @@ function configureRecipeImage(image, recipe, className, alt = recipe.name) {
 
 function recipeCard(recipe) {
   const isExternal = recipe.source === 'external';
+  const hasOfflineDetails = isExternal
+    && recipe.externalProvider === 'fictional-offline'
+    && /^external:themealdb:\d+$/.test(recipe.id);
   const saved = state.favorites.has(recipe.id);
   const card = createElement('article', `recipe-card${isExternal ? ' external-preview' : ''}`);
   card.dataset.id = recipe.id;
@@ -65,7 +68,10 @@ function recipeCard(recipe) {
 
   const viewButton = createElement('button', 'view-btn', 'View recipe →');
   viewButton.type = 'button';
-  if (isExternal) {
+  if (hasOfflineDetails) {
+    viewButton.dataset.externalView = recipe.id;
+    viewButton.setAttribute('aria-label', `View offline details for ${recipe.name}`);
+  } else if (isExternal) {
     setSafeText(viewButton, 'Preview only');
     viewButton.disabled = true;
     viewButton.setAttribute('aria-label', `${recipe.name} details are not available in this preview`);

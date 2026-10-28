@@ -1,7 +1,15 @@
 import { recipeCatalog } from './js/recipe-catalog.js';
 import { applyStoredTheme, clearFilters, state, toggleFavorite, toggleTheme } from './js/state.js';
 import { initializeImageFallbacks, render, renderCategories, renderCuisines, showToast } from './js/render.js';
-import { closeRecipeModal, openRecipe } from './js/modal.js';
+import {
+  closeRecipeModal,
+  handleRecipeModalTab,
+  isRecipeModalOpen,
+  openRecipe,
+  openRecipeDetails,
+  openRecipeError,
+  openRecipeLoading,
+} from './js/modal.js';
 import { initializeCategoryCarousel, toggleCategoriesExpansion } from './js/category-carousel.js';
 import { createFictionalExternalRecipeController } from './js/fictional-external-recipe-source.js';
 
@@ -12,6 +20,41 @@ const mobileSidebarQuery = matchMedia(MOBILE_SIDEBAR_QUERY);
 const externalRecipeController = createFictionalExternalRecipeController();
 let dashboardCatalog = recipeCatalog;
 let lastExternalOperation = null;
+let externalDetailGeneration = 0;
+
+function invalidateExternalDetails({ closeModal = false, restoreFocus = false } = {}) {
+  externalDetailGeneration += 1;
+  externalRecipeController.invalidateDetails();
+  if (closeModal) closeRecipeModal({ restoreFocus });
+}
+
+function closeActiveRecipeModal() {
+  invalidateExternalDetails();
+  closeRecipeModal();
+}
+
+function openDemoRecipe(id, trigger) {
+  invalidateExternalDetails();
+  return openRecipe(id, { trigger });
+}
+
+async function openExternalRecipe(id, trigger) {
+  invalidateExternalDetails();
+  const generation = externalDetailGeneration;
+  openRecipeLoading(trigger);
+  try {
+    const recipe = await externalRecipeController.getDetails(id);
+    if (generation !== externalDetailGeneration || !isRecipeModalOpen()) return;
+    if (recipe?.id === id && recipe.detailLevel === 'full') {
+      openRecipeDetails(recipe);
+      return;
+    }
+    openRecipeError();
+  } catch (error) {
+    if (generation !== externalDetailGeneration || !isRecipeModalOpen()) return;
+    if (error?.code !== 'CANCELLED' && error?.code !== 'ABORTED') openRecipeError();
+  }
+}
 
 function renderDashboard() {
   render(dashboardCatalog, externalRecipeController.getState());
@@ -26,6 +69,7 @@ function synchronizeExternalRecipes() {
 }
 
 function resetExternalDiscovery({ clearRetry = true } = {}) {
+  invalidateExternalDetails({ closeModal: true, restoreFocus: false });
   externalRecipeController.invalidateCollection();
   dashboardCatalog = recipeCatalog;
   if (clearRetry) lastExternalOperation = null;
@@ -170,9 +214,15 @@ function initializePageActions() {
       return;
     }
 
+    const externalViewButton = event.target.closest('[data-external-view]');
+    if (externalViewButton) {
+      openExternalRecipe(externalViewButton.dataset.externalView, externalViewButton);
+      return;
+    }
+
     const viewButton = event.target.closest('[data-view]');
     if (viewButton) {
-      openRecipe(viewButton.dataset.view);
+      openDemoRecipe(viewButton.dataset.view, viewButton);
       return;
     }
 
@@ -235,10 +285,10 @@ function initializePageActions() {
     if (event.target.closest('.surprise-btn')) {
       const recipes = recipeCatalog.list();
       const randomRecipe = recipes[Math.floor(Math.random() * recipes.length)];
-      openRecipe(randomRecipe.id);
+      openDemoRecipe(randomRecipe.id, event.target.closest('.surprise-btn'));
     }
 
-    if (event.target.closest('[data-close]')) closeRecipeModal();
+    if (event.target.closest('[data-close]')) closeActiveRecipeModal();
   });
 }
 
@@ -264,8 +314,13 @@ function initializeNavigation() {
   });
 
   document.addEventListener('keydown', (event) => {
+    if (handleRecipeModalTab(event)) return;
     if (event.key === 'Escape') {
-      closeRecipeModal();
+      if (isRecipeModalOpen()) {
+        event.preventDefault();
+        closeActiveRecipeModal();
+        return;
+      }
       closeMobileSidebar({ restoreFocus: true });
     }
   });
