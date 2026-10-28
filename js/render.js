@@ -151,11 +151,23 @@ function renderExternalStatus(externalState) {
   const status = $('#external-status');
   const message = $('#external-status-message');
   const retry = $('#external-retry');
+  const discoverMore = $('#discover-more-recipes');
   const recommended = $('#recommended');
   const currentStatus = externalState?.status || 'idle';
+  const showingAll = state.view === 'all';
+  const discoverLabels = {
+    idle: 'Discover More Offline Recipes',
+    loading: 'Discovering Offline Recipes…',
+    ready: 'Offline Recipes Added',
+    empty: 'No More Offline Recipes',
+    error: 'Discover More Offline Recipes',
+  };
   recommended.setAttribute('aria-busy', String(currentStatus === 'loading'));
   status.hidden = currentStatus === 'idle';
   retry.hidden = currentStatus !== 'error';
+  discoverMore.hidden = !showingAll;
+  discoverMore.textContent = discoverLabels[currentStatus] || discoverLabels.error;
+  discoverMore.setAttribute('aria-disabled', String(currentStatus !== 'idle'));
 
   if (currentStatus === 'loading') message.textContent = 'Checking the offline recipe preview collection...';
   else if (currentStatus === 'ready') {

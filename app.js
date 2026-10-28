@@ -38,6 +38,13 @@ function discoverExternalRecipes(operation, value, { remember = true } = {}) {
   request.then(synchronizeExternalRecipes);
 }
 
+function discoverMoreRecipes() {
+  const externalStatus = externalRecipeController.getState().status;
+  if (state.view !== 'all' || externalStatus !== 'idle') return false;
+  discoverExternalRecipes('discoverAll');
+  return true;
+}
+
 function setActiveNavigation(section) {
   const links = $$('.nav-link');
   const activeLink = links.find((link) => link.dataset.section === section);
@@ -206,6 +213,11 @@ function initializePageActions() {
       if (lastExternalOperation) {
         discoverExternalRecipes(lastExternalOperation.operation, lastExternalOperation.value, { remember: false });
       }
+      return;
+    }
+
+    if (event.target.closest('[data-discover-more]')) {
+      discoverMoreRecipes();
       return;
     }
 

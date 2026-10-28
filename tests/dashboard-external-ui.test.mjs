@@ -58,6 +58,13 @@ assert.equal(recipeCatalog.getById(categoryResults[0].id), null, 'Demo singleton
 assert.throws(() => recipeCatalog.withRecipes([recipeCatalog.list()[0]]), /Duplicate recipe ID/);
 
 const controller = createFictionalExternalRecipeController();
+const allPreviews = await controller.discoverAll();
+assert.equal(allPreviews.status, 'ready');
+assert.equal(allPreviews.recipes.length, 6);
+assert.deepEqual(allPreviews.recipes.map(({ id }) => id), [
+  'external:themealdb:990001', 'external:themealdb:990002', 'external:themealdb:990003',
+  'external:themealdb:990004', 'external:themealdb:990005', 'external:themealdb:990006',
+]);
 const pendingSearch = controller.search('citrus');
 assert.equal(controller.getState().status, 'loading');
 assert.equal((await pendingSearch).status, 'ready');
@@ -107,6 +114,7 @@ const css = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
 
 assert.match(appSource, /createFictionalExternalRecipeController/);
 assert.match(appSource, /data-external-retry/);
+assert.match(appSource, /data-discover-more/);
 assert.match(appSource, /invalidateCollection/);
 assert.match(appSource, /section === 'categories' \|\| link\.dataset\.section === 'cuisines'/);
 const initializeAppBody = appSource.match(/function initializeApp\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
@@ -114,12 +122,42 @@ assert.doesNotMatch(initializeAppBody, /discoverExternalRecipes/, 'Page initiali
 assert.doesNotMatch(appSource, /createMealDbClient|mealdb-client|fetch\(|supabase-config|localStorage.*external/i);
 assert.match(renderSource, /Offline recipe preview/);
 assert.match(renderSource, /viewButton\.disabled = true/);
+assert.match(renderSource, /discoverMore\.hidden = !showingAll/);
+assert.match(renderSource, /aria-disabled/);
 assert.doesNotMatch(renderSource, /externalState\.error\??\.message/);
 assert.doesNotMatch(renderSource, /\.innerHTML\s*=|insertAdjacentHTML/);
 assert.match(html, /id="external-status"[^>]+aria-live="polite"/);
 assert.match(html, /data-external-retry/);
+assert.match(html, /id="discover-more-recipes"[^>]+data-discover-more[^>]+hidden/);
 assert.match(css, /\.external-status/);
 assert.match(css, /\.external-preview/);
+assert.match(css, /\.recipe-view-actions\{[^}]*flex-wrap:wrap/);
+
+const discoverMoreSource = appSource.match(/function discoverMoreRecipes\(\)[\s\S]*?\n\}/)?.[0] || '';
+assert.match(discoverMoreSource, /state\.view !== 'all' \|\| externalStatus !== 'idle'/);
+assert.match(discoverMoreSource, /discoverExternalRecipes\('discoverAll'\)/);
+let simulatedStatus = 'idle';
+let explicitDiscoveryCalls = 0;
+const simulatedViewState = { view: 'default' };
+const executeDiscoverMore = Function(
+  'state',
+  'externalRecipeController',
+  'discoverExternalRecipes',
+  `${discoverMoreSource}\nreturn discoverMoreRecipes;`,
+)(
+  simulatedViewState,
+  { getState: () => ({ status: simulatedStatus }) },
+  (operation) => {
+    assert.equal(operation, 'discoverAll');
+    explicitDiscoveryCalls += 1;
+    simulatedStatus = 'loading';
+  },
+);
+assert.equal(executeDiscoverMore(), false, 'Discovery must remain unavailable outside All Recipes');
+simulatedViewState.view = 'all';
+assert.equal(executeDiscoverMore(), true, 'The explicit All Recipes action must start discovery');
+assert.equal(executeDiscoverMore(), false, 'A repeat activation while loading must be ignored');
+assert.equal(explicitDiscoveryCalls, 1);
 
 class FakeElement {
   constructor(tagName = 'div') {
@@ -156,6 +194,7 @@ class FakeElement {
 
 const elementIds = [
   'fav-count', 'favorite-list', 'external-status', 'external-status-message', 'external-retry',
+  'discover-more-recipes',
   'recommended', 'recommended-title', 'back-to-discover', 'recommended-view-all', 'recommended-grid',
   'more-grid', 'more-recipes', 'empty-state', 'empty-title', 'empty-message', 'toast',
 ];
@@ -185,6 +224,47 @@ const renderModule = await import(`../js/render.js?favorites=${Date.now()}`);
 const { state: favoriteState } = await import('../js/state.js');
 favoriteState.view = 'favorites';
 renderModule.render(recipeCatalog, { status: 'idle', recipes: [], error: null, generation: 0 });
+
+const discoverAction = fakeElements.get('#discover-more-recipes');
+assert.equal(discoverAction.hidden, true, 'Discovery action must stay hidden outside All Recipes');
+favoriteState.view = 'all';
+renderModule.render(recipeCatalog, { status: 'idle', recipes: [], error: null, generation: 0 });
+assert.equal(discoverAction.hidden, false);
+assert.equal(discoverAction.textContent, 'Discover More Offline Recipes');
+assert.equal(discoverAction.attributes['aria-disabled'], 'false');
+assert.equal(fakeElements.get('#recommended-grid').children.length, originalDemoIds.length, 'Opening All Recipes must remain demo-only');
+
+renderModule.render(recipeCatalog, { status: 'loading', recipes: [], error: null, generation: 1 });
+assert.equal(discoverAction.textContent, 'Discovering Offline Recipes…');
+assert.equal(discoverAction.attributes['aria-disabled'], 'true');
+assert.equal(fakeElements.get('#recommended').attributes['aria-busy'], 'true');
+
+const allPreviewRecipes = allPreviews.recipes;
+const allRecipesCatalog = recipeCatalog.withRecipes(allPreviewRecipes);
+renderModule.render(allRecipesCatalog, { status: 'ready', recipes: allPreviewRecipes, error: null, generation: 1 });
+assert.equal(discoverAction.textContent, 'Offline Recipes Added');
+assert.equal(discoverAction.attributes['aria-disabled'], 'true');
+assert.equal(fakeElements.get('#recommended-grid').children.length, originalDemoIds.length + 6);
+assert.deepEqual(
+  fakeElements.get('#recommended-grid').children.map((card) => card.dataset.id),
+  [...originalDemoIds, ...allPreviewRecipes.map(({ id }) => id)],
+  'All Recipes must keep demo-first ordering without duplicate IDs',
+);
+assert.equal(new Set(fakeElements.get('#recommended-grid').children.map((card) => card.dataset.id)).size, originalDemoIds.length + 6);
+
+renderModule.render(recipeCatalog, { status: 'empty', recipes: [], error: null, generation: 2 });
+assert.equal(discoverAction.textContent, 'No More Offline Recipes');
+assert.equal(discoverAction.attributes['aria-disabled'], 'true');
+renderModule.render(recipeCatalog, { status: 'error', recipes: [], error: { code: 'network' }, generation: 3 });
+assert.equal(discoverAction.textContent, 'Discover More Offline Recipes');
+assert.equal(discoverAction.attributes['aria-disabled'], 'true');
+assert.equal(fakeElements.get('#external-retry').hidden, false, 'Existing Retry must remain available after errors');
+
+favoriteState.view = 'all';
+renderModule.render(recipeCatalog, { status: 'idle', recipes: [], error: null, generation: 4 });
+assert.equal(fakeElements.get('#recommended-grid').children.length, originalDemoIds.length, 'Reopening All Recipes must reset to demo-only');
+favoriteState.view = 'favorites';
+renderModule.render(recipeCatalog, { status: 'idle', recipes: [], error: null, generation: 5 });
 
 assert.equal(fakeElements.get('#fav-count').textContent, storedFavoriteIds.length, 'Count must include unresolved IDs');
 assert.equal(fakeElements.get('#favorite-list').children.length, 4, 'Sidebar preview must remain capped at four entries');

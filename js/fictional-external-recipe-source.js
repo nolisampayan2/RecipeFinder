@@ -1,5 +1,7 @@
 import { createExternalRecipeController } from './external-recipe-controller.js';
 
+const DISCOVER_ALL_QUERY = 'recipefinder:discover-all-offline-previews';
+
 const FICTIONAL_RECIPES = Object.freeze([
   {
     id: 'external:themealdb:990001', externalId: '990001', name: 'Aurora Garden Couscous',
@@ -103,6 +105,7 @@ export function createFictionalExternalRecipeSource({ recipes = FICTIONAL_RECIPE
     async search(query, { signal } = {}) {
       checkSignal(signal);
       const normalizedQuery = requireText(query, 'query').toLowerCase();
+      if (normalizedQuery === DISCOVER_ALL_QUERY) return records;
       return records.filter((recipe) => searchText(recipe).includes(normalizedQuery));
     },
 
@@ -130,5 +133,9 @@ export function createFictionalExternalRecipeSource({ recipes = FICTIONAL_RECIPE
 }
 
 export function createFictionalExternalRecipeController(options) {
-  return createExternalRecipeController({ source: createFictionalExternalRecipeSource(options) });
+  const controller = createExternalRecipeController({ source: createFictionalExternalRecipeSource(options) });
+  return Object.freeze({
+    ...controller,
+    discoverAll: (requestOptions) => controller.search(DISCOVER_ALL_QUERY, requestOptions),
+  });
 }
