@@ -1,0 +1,239 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { createExternalRecipeController } from '../js/external-recipe-controller.js';
+import {
+  createFictionalExternalRecipeController,
+  createFictionalExternalRecipeSource,
+} from '../js/fictional-external-recipe-source.js';
+import { recipeCatalog } from '../js/recipe-catalog.js';
+
+let fetchCalls = 0;
+globalThis.fetch = () => { fetchCalls += 1; throw new Error('Fictional source must remain offline'); };
+await import(`../js/fictional-external-recipe-source.js?inert=${Date.now()}`);
+const source = createFictionalExternalRecipeSource();
+assert.equal(fetchCalls, 0);
+
+const mutableFixture = [{
+  id: 'external:themealdb:991000',
+  name: 'Mutable Fictional Fixture',
+  category: 'Vegetarian',
+  cuisine: 'Italian',
+  description: 'A fictional fixture.',
+  ingredients: [['Ingredient', '1 unit']],
+  detailLevel: 'full',
+  source: 'external',
+}];
+const fixtureSnapshot = structuredClone(mutableFixture);
+createFictionalExternalRecipeSource({ recipes: mutableFixture });
+assert.deepEqual(mutableFixture, fixtureSnapshot, 'Source construction must not mutate injected records');
+assert.throws(
+  () => createFictionalExternalRecipeSource({ recipes: [mutableFixture[0], mutableFixture[0]] }),
+  /Duplicate fictional recipe ID/,
+);
+
+const searchResults = await source.search('citrus');
+assert.deepEqual(searchResults.map(({ id }) => id), ['external:themealdb:990002']);
+assert.equal(searchResults[0].detailLevel, 'full');
+assert.equal(searchResults[0].externalProvider, 'fictional-offline');
+assert.equal(searchResults[0].image, 'assets/recipefinder-favicon.svg');
+const categoryResults = await source.filterCategory('Vegetarian');
+assert.equal(categoryResults[0].detailLevel, 'summary');
+assert.deepEqual(categoryResults[0].ingredients, []);
+assert.equal((await source.filterCuisine('Italian'))[0].id, 'external:themealdb:990006');
+assert.equal((await source.getDetails('external:themealdb:990001')).detailLevel, 'full');
+await assert.rejects(source.getDetails('external:themealdb:1'), (error) => error.code === 'NOT_FOUND');
+await assert.rejects(source.getDetails('unsafe-id'), /valid external recipe ID/);
+
+const cancelled = new AbortController();
+cancelled.abort();
+await assert.rejects(source.search('garden', { signal: cancelled.signal }), (error) => error.code === 'ABORTED');
+assert.equal(fetchCalls, 0);
+delete globalThis.fetch;
+
+const originalDemoIds = recipeCatalog.list().map(({ id }) => id);
+const mixedCatalog = recipeCatalog.withRecipes(categoryResults);
+assert.deepEqual(mixedCatalog.list().slice(0, originalDemoIds.length).map(({ id }) => id), originalDemoIds);
+assert.equal(mixedCatalog.list().at(-1).source, 'external');
+assert.equal(recipeCatalog.getById(categoryResults[0].id), null, 'Demo singleton must remain demo-only');
+assert.throws(() => recipeCatalog.withRecipes([recipeCatalog.list()[0]]), /Duplicate recipe ID/);
+
+const controller = createFictionalExternalRecipeController();
+const pendingSearch = controller.search('citrus');
+assert.equal(controller.getState().status, 'loading');
+assert.equal((await pendingSearch).status, 'ready');
+assert.equal((await controller.filterCategory('Vegetarian')).recipes[0].detailLevel, 'summary');
+assert.equal((await controller.filterCuisine('Italian')).recipes[0].cuisine, 'Italian');
+assert.equal((await controller.search('no fictional match')).status, 'empty');
+
+const retryCalls = [];
+const retryController = createExternalRecipeController({
+  source: {
+    search: async (value) => {
+      retryCalls.push(value);
+      if (retryCalls.length === 1) throw Object.assign(new Error('offline failure'), { code: 'NETWORK_ERROR' });
+      return searchResults;
+    },
+    filterCategory: source.filterCategory,
+    filterCuisine: source.filterCuisine,
+    getDetails: source.getDetails,
+  },
+});
+assert.equal((await retryController.search('citrus')).status, 'error');
+assert.equal((await retryController.search('citrus')).status, 'ready');
+assert.deepEqual(retryCalls, ['citrus', 'citrus']);
+
+let resolveOld;
+const staleController = createExternalRecipeController({
+  source: {
+    ...source,
+    search: (value) => value === 'old'
+      ? new Promise((resolve) => { resolveOld = resolve; })
+      : Promise.resolve(searchResults),
+  },
+});
+const oldRequest = staleController.search('old');
+await Promise.resolve();
+assert.equal((await staleController.search('new')).status, 'ready');
+resolveOld(categoryResults);
+await oldRequest;
+assert.equal(staleController.getState().recipes[0].id, searchResults[0].id);
+staleController.invalidateCollection();
+assert.equal(staleController.getState().status, 'idle');
+
+const appSource = await readFile(new URL('../app.js', import.meta.url), 'utf8');
+const renderSource = await readFile(new URL('../js/render.js', import.meta.url), 'utf8');
+const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
+const css = await readFile(new URL('../styles.css', import.meta.url), 'utf8');
+
+assert.match(appSource, /createFictionalExternalRecipeController/);
+assert.match(appSource, /data-external-retry/);
+assert.match(appSource, /invalidateCollection/);
+assert.match(appSource, /section === 'categories' \|\| link\.dataset\.section === 'cuisines'/);
+const initializeAppBody = appSource.match(/function initializeApp\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
+assert.doesNotMatch(initializeAppBody, /discoverExternalRecipes/, 'Page initialization must not start discovery');
+assert.doesNotMatch(appSource, /createMealDbClient|mealdb-client|fetch\(|supabase-config|localStorage.*external/i);
+assert.match(renderSource, /Offline recipe preview/);
+assert.match(renderSource, /viewButton\.disabled = true/);
+assert.doesNotMatch(renderSource, /externalState\.error\??\.message/);
+assert.doesNotMatch(renderSource, /\.innerHTML\s*=|insertAdjacentHTML/);
+assert.match(html, /id="external-status"[^>]+aria-live="polite"/);
+assert.match(html, /data-external-retry/);
+assert.match(css, /\.external-status/);
+assert.match(css, /\.external-preview/);
+
+class FakeElement {
+  constructor(tagName = 'div') {
+    this.tagName = tagName.toUpperCase();
+    this.children = [];
+    this.dataset = {};
+    this.attributes = {};
+    this.className = '';
+    this.textContent = '';
+    this.hidden = false;
+    this.listeners = new Map();
+    this.classList = {
+      add: (...names) => { this.className = [...new Set([...this.className.split(' ').filter(Boolean), ...names])].join(' '); },
+      remove: (...names) => { this.className = this.className.split(' ').filter((name) => !names.includes(name)).join(' '); },
+      toggle: (name, force) => {
+        const present = this.className.split(' ').includes(name);
+        const enabled = force === undefined ? !present : force;
+        this.classList[enabled ? 'add' : 'remove'](name);
+        return enabled;
+      },
+    };
+  }
+
+  append(...children) { this.children.push(...children); }
+  replaceChildren(...children) { this.children = [...children]; }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name] ?? null; }
+  addEventListener(type, listener) {
+    if (!this.listeners.has(type)) this.listeners.set(type, []);
+    this.listeners.get(type).push(listener);
+  }
+  dispatch(type) { this.listeners.get(type)?.forEach((listener) => listener({ target: this })); }
+}
+
+const elementIds = [
+  'fav-count', 'favorite-list', 'external-status', 'external-status-message', 'external-retry',
+  'recommended', 'recommended-title', 'back-to-discover', 'recommended-view-all', 'recommended-grid',
+  'more-grid', 'more-recipes', 'empty-state', 'empty-title', 'empty-message', 'toast',
+];
+const fakeElements = new Map(elementIds.map((id) => [`#${id}`, new FakeElement()]));
+const originalDocument = globalThis.document;
+const originalLocalStorage = globalThis.localStorage;
+const hostileIds = [
+  '"><img src=x onerror=alert(1)>',
+  'external:themealdb:990099',
+  'javascript:alert(1)',
+  'data:text/html,<script>alert(1)</script>',
+  'malformed favorite with spaces',
+];
+const storedFavoriteIds = ['lemon-chicken', ...hostileIds];
+const storageWrites = [];
+globalThis.document = {
+  createElement: (tagName) => new FakeElement(tagName),
+  querySelector: (selector) => fakeElements.get(selector) || null,
+  querySelectorAll: () => [],
+};
+globalThis.localStorage = {
+  getItem: (key) => key === 'recipefinder:favorites' ? JSON.stringify(storedFavoriteIds) : null,
+  setItem: (key, value) => storageWrites.push([key, value]),
+};
+
+const renderModule = await import(`../js/render.js?favorites=${Date.now()}`);
+const { state: favoriteState } = await import('../js/state.js');
+favoriteState.view = 'favorites';
+renderModule.render(recipeCatalog, { status: 'idle', recipes: [], error: null, generation: 0 });
+
+assert.equal(fakeElements.get('#fav-count').textContent, storedFavoriteIds.length, 'Count must include unresolved IDs');
+assert.equal(fakeElements.get('#favorite-list').children.length, 4, 'Sidebar preview must remain capped at four entries');
+assert.equal(fakeElements.get('#recommended-grid').children.length, storedFavoriteIds.length, 'Full view must include every saved ID');
+assert.equal(storageWrites.length, 0, 'Rendering must not rewrite or delete stored favorites');
+
+const placeholderCards = fakeElements.get('#recommended-grid').children
+  .filter((card) => card.className.includes('unavailable-favorite-card'));
+assert.equal(placeholderCards.length, hostileIds.length);
+const firstPlaceholder = placeholderCards[0];
+const firstPlaceholderBody = firstPlaceholder.children[1];
+assert.equal(firstPlaceholderBody.children[0].textContent, 'Preview currently unavailable');
+assert.equal(firstPlaceholderBody.children[1].textContent, 'Saved offline recipe');
+assert.equal(firstPlaceholderBody.children[2].textContent, 'Find this recipe again using search or filters.');
+const placeholderRemove = firstPlaceholderBody.children[3];
+assert.equal(placeholderRemove.textContent, 'Remove favorite');
+assert.equal(placeholderRemove.attributes['aria-label'], 'Remove saved offline recipe from favorites');
+assert.equal(placeholderRemove.dataset.view, undefined, 'Placeholder must not expose a modal action');
+assert.deepEqual(placeholderRemove.dataset, {}, 'Opaque ID must not be stored in data attributes');
+
+function serializedVisibleTree(element) {
+  return JSON.stringify({
+    className: element.className,
+    textContent: element.textContent,
+    attributes: element.attributes,
+    dataset: element.dataset,
+    children: element.children.map(serializedVisibleTree),
+  });
+}
+const visibleTree = serializedVisibleTree(fakeElements.get('#recommended-grid'));
+hostileIds.forEach((id) => assert.equal(visibleTree.includes(id), false, `Stored ID leaked into rendered output: ${id}`));
+
+const originalSetTimeout = globalThis.setTimeout;
+const originalClearTimeout = globalThis.clearTimeout;
+globalThis.setTimeout = (callback) => { callback(); return 1; };
+globalThis.clearTimeout = () => {};
+placeholderRemove.dispatch('click');
+globalThis.setTimeout = originalSetTimeout;
+globalThis.clearTimeout = originalClearTimeout;
+
+assert.equal(fakeElements.get('#fav-count').textContent, storedFavoriteIds.length - 1);
+assert.equal(fakeElements.get('#recommended-grid').children.length, storedFavoriteIds.length - 1);
+assert.equal(storageWrites.length, 1);
+assert.equal(JSON.parse(storageWrites[0][1]).includes(hostileIds[0]), false, 'Remove must use the original opaque ID internally');
+const resolvedDemoCard = fakeElements.get('#recommended-grid').children[0];
+assert.equal(resolvedDemoCard.dataset.id, 'lemon-chicken');
+assert.equal(resolvedDemoCard.children.at(-1).children.at(-1).dataset.view, 'lemon-chicken', 'Resolved demo behavior must remain unchanged');
+
+globalThis.document = originalDocument;
+globalThis.localStorage = originalLocalStorage;
+
+console.log('Offline fictional external recipe dashboard tests passed without network or live API access.');

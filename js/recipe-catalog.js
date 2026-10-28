@@ -49,6 +49,11 @@ export function createRecipeCatalog(sourceRecipes) {
       return Object.freeze(filterRecipes(orderedRecipes, query, filter));
     },
 
+    withRecipes(additionalRecipes) {
+      if (!Array.isArray(additionalRecipes)) throw new TypeError('Additional recipes must be an array.');
+      return createRecipeCatalog([...orderedRecipes, ...additionalRecipes]);
+    },
+
     resolveFavoriteIds(ids) {
       if (!ids || typeof ids[Symbol.iterator] !== 'function') {
         throw new TypeError('Favorite IDs must be iterable.');

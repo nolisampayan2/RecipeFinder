@@ -3,11 +3,52 @@ import { applyStoredTheme, clearFilters, state, toggleFavorite, toggleTheme } fr
 import { initializeImageFallbacks, render, renderCategories, renderCuisines, showToast } from './js/render.js';
 import { closeRecipeModal, openRecipe } from './js/modal.js';
 import { initializeCategoryCarousel, toggleCategoriesExpansion } from './js/category-carousel.js';
+import { createFictionalExternalRecipeController } from './js/fictional-external-recipe-source.js';
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const MOBILE_SIDEBAR_QUERY = '(max-width: 980px)';
 const mobileSidebarQuery = matchMedia(MOBILE_SIDEBAR_QUERY);
+const externalRecipeController = createFictionalExternalRecipeController();
+let dashboardCatalog = recipeCatalog;
+let lastExternalOperation = null;
+
+function renderDashboard() {
+  render(dashboardCatalog, externalRecipeController.getState());
+}
+
+function synchronizeExternalRecipes() {
+  const externalState = externalRecipeController.getState();
+  dashboardCatalog = externalState.status === 'ready' && externalState.recipes.length
+    ? recipeCatalog.withRecipes(externalState.recipes)
+    : recipeCatalog;
+  renderDashboard();
+}
+
+function resetExternalDiscovery({ clearRetry = true } = {}) {
+  externalRecipeController.invalidateCollection();
+  dashboardCatalog = recipeCatalog;
+  if (clearRetry) lastExternalOperation = null;
+}
+
+function discoverExternalRecipes(operation, value, { remember = true } = {}) {
+  if (remember) lastExternalOperation = Object.freeze({ operation, value });
+  const request = externalRecipeController[operation](value);
+  synchronizeExternalRecipes();
+  request.then(synchronizeExternalRecipes);
+}
+
+function setActiveNavigation(section) {
+  const links = $$('.nav-link');
+  const activeLink = links.find((link) => link.dataset.section === section);
+  links.forEach((link) => {
+    const active = link === activeLink;
+    link.classList.toggle('active', active);
+    if (active) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  });
+  return Boolean(activeLink);
+}
 
 function setSidebarOpen(open) {
   const sidebar = $('#sidebar');
@@ -25,29 +66,43 @@ function closeMobileSidebar({ restoreFocus = false, focusTarget = null } = {}) {
   else if (restoreFocus) $('#menu-btn').focus();
 }
 
+function restoreDiscoveryCollection() {
+  resetExternalDiscovery();
+  clearFilters();
+  $('#search-input').value = '';
+  renderDashboard();
+}
+
 function applyFilter(value) {
+  const operation = $$('#cuisine-list [data-filter]')
+    .some((button) => button.dataset.filter === value)
+    ? 'filterCuisine'
+    : 'filterCategory';
+  resetExternalDiscovery();
   state.filter = state.filter === value ? '' : value;
   state.query = '';
   state.view = 'default';
   $('#search-input').value = '';
-  render();
+  renderDashboard();
+  if (state.filter) discoverExternalRecipes(operation, state.filter);
   $('#recommended').scrollIntoView({ behavior: 'smooth' });
   showToast(state.filter ? `Showing ${state.filter} recipes` : 'Showing all recipes');
 }
 
 function showRecipeCollection(view) {
+  resetExternalDiscovery();
   clearFilters();
   state.view = view;
+  setActiveNavigation(view === 'favorites' ? 'favorites' : 'recommended');
   $('#search-input').value = '';
-  render();
+  renderDashboard();
   $('#recommended').scrollIntoView({ behavior: 'smooth' });
   showToast(view === 'favorites' ? 'Showing all saved recipes' : 'Showing all recipes');
 }
 
 function restoreDiscoverView(destination = 'recommended', announce = true) {
-  clearFilters();
-  $('#search-input').value = '';
-  render();
+  restoreDiscoveryCollection();
+  setActiveNavigation('recommended');
   const target = document.getElementById(destination);
   target?.scrollIntoView({ behavior: 'smooth' });
   target?.focus({ preventScroll: true });
@@ -55,9 +110,8 @@ function restoreDiscoverView(destination = 'recommended', announce = true) {
 }
 
 function showAllCuisines() {
-  clearFilters();
-  $('#search-input').value = '';
-  render();
+  restoreDiscoveryCollection();
+  setActiveNavigation('cuisines');
   $('#cuisines').scrollIntoView({ behavior: 'smooth', block: 'start' });
   $('#cuisine-list').focus({ preventScroll: true });
   showToast('All cuisines are shown');
@@ -80,18 +134,21 @@ function updateThemeToggle(dark) {
 function initializeSearch() {
   $('#search-form').addEventListener('submit', (event) => {
     event.preventDefault();
+    resetExternalDiscovery();
     state.filter = '';
     state.view = 'default';
     state.query = $('#search-input').value.trim();
-    render();
+    renderDashboard();
+    if (state.query) discoverExternalRecipes('search', state.query);
     $('#recommended').scrollIntoView({ behavior: 'smooth' });
     showToast(state.query ? `Showing results for “${state.query}”` : 'Showing all recipes');
   });
 
   $('#search-input').addEventListener('input', (event) => {
     if (!event.target.value) {
+      resetExternalDiscovery();
       state.query = '';
-      render();
+      renderDashboard();
     }
   });
 }
@@ -101,7 +158,7 @@ function initializePageActions() {
     const favoriteButton = event.target.closest('[data-favorite]');
     if (favoriteButton) {
       toggleFavorite(favoriteButton.dataset.favorite);
-      render();
+      renderDashboard();
       showToast('Favorites updated');
       return;
     }
@@ -122,7 +179,11 @@ function initializePageActions() {
     const viewAllButton = event.target.closest('[data-view-all]');
     if (viewAllButton) {
       const target = viewAllButton.dataset.viewAll;
-      if (target === 'categories') toggleCategoriesExpansion();
+      if (target === 'categories') {
+        restoreDiscoveryCollection();
+        setActiveNavigation('categories');
+        toggleCategoriesExpansion();
+      }
       else if (target === 'cuisines') showAllCuisines();
       else showRecipeCollection(target === 'favorites' ? 'favorites' : 'all');
       return;
@@ -134,9 +195,17 @@ function initializePageActions() {
     }
 
     if (event.target.closest('[data-clear]')) {
+      resetExternalDiscovery();
       clearFilters();
       $('#search-input').value = '';
-      render();
+      renderDashboard();
+      return;
+    }
+
+    if (event.target.closest('[data-external-retry]')) {
+      if (lastExternalOperation) {
+        discoverExternalRecipes(lastExternalOperation.operation, lastExternalOperation.value, { remember: false });
+      }
       return;
     }
 
@@ -162,19 +231,19 @@ function initializePageActions() {
 }
 
 function initializeNavigation() {
+  setActiveNavigation('home');
   $('#menu-btn').addEventListener('click', () => {
     setSidebarOpen(!$('#sidebar').classList.contains('open'));
   });
 
   $$('.nav-link').forEach((link) => {
     link.addEventListener('click', (event) => {
-      $$('.nav-link').forEach((item) => item.classList.remove('active'));
-      link.classList.add('active');
+      setActiveNavigation(link.dataset.section);
       closeMobileSidebar({ restoreFocus: true });
       if (link.dataset.section === 'home' || link.dataset.section === 'recommended') {
-        clearFilters();
-        $('#search-input').value = '';
-        render();
+        restoreDiscoveryCollection();
+      } else if (link.dataset.section === 'categories' || link.dataset.section === 'cuisines') {
+        restoreDiscoveryCollection();
       } else if (link.dataset.section === 'favorites') {
         event.preventDefault();
         showRecipeCollection('favorites');
@@ -199,7 +268,7 @@ function initializeApp() {
   renderCategories();
   initializeCategoryCarousel();
   renderCuisines();
-  render();
+  renderDashboard();
   initializeTheme();
   initializeSearch();
   initializePageActions();
