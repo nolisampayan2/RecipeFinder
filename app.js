@@ -13,6 +13,7 @@ import {
 import { initializeCategoryCarousel, toggleCategoriesExpansion } from './js/category-carousel.js';
 import { createFictionalExternalRecipeController } from './js/fictional-external-recipe-source.js';
 import { createExternalSourceRegistry } from './js/external-source-registry.js';
+import { createLiveMealDbDashboard } from './js/live-mealdb-dashboard.js';
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -25,6 +26,8 @@ const externalSourceRegistry = createExternalSourceRegistry({
 let dashboardCatalog = recipeCatalog;
 let lastExternalOperation = null;
 let externalDetailGeneration = 0;
+let liveDashboard = null;
+let recipeMode = 'offline';
 
 function invalidateExternalDetails({ closeModal = false, restoreFocus = false } = {}) {
   externalDetailGeneration += 1;
@@ -61,10 +64,40 @@ async function openExternalRecipe(id, trigger) {
 }
 
 function renderDashboard() {
-  render(dashboardCatalog, externalRecipeController.getState());
+  const externalState = recipeMode === 'live' && liveDashboard
+    ? liveDashboard.getState()
+    : externalRecipeController.getState();
+  render(dashboardCatalog, externalState);
+}
+
+function synchronizeLiveRecipes(liveState) {
+  if (recipeMode !== 'live') return;
+  dashboardCatalog = liveState.status === 'ready' && liveState.recipes.length
+    ? recipeCatalog.withRecipes(liveState.recipes)
+    : recipeCatalog;
+  render(dashboardCatalog, liveState);
+}
+
+function getLiveDashboard() {
+  if (!liveDashboard) {
+    liveDashboard = createLiveMealDbDashboard({
+      fetchImpl: window.fetch.bind(window),
+      onState: synchronizeLiveRecipes,
+    });
+  }
+  return liveDashboard;
+}
+
+function exitLiveMode() {
+  if (recipeMode !== 'live') return false;
+  recipeMode = 'offline';
+  liveDashboard?.reset();
+  dashboardCatalog = recipeCatalog;
+  return true;
 }
 
 function synchronizeExternalRecipes() {
+  if (recipeMode !== 'offline') return;
   const externalState = externalRecipeController.getState();
   dashboardCatalog = externalState.status === 'ready' && externalState.recipes.length
     ? recipeCatalog.withRecipes(externalState.recipes)
@@ -73,6 +106,7 @@ function synchronizeExternalRecipes() {
 }
 
 function resetExternalDiscovery({ clearRetry = true } = {}) {
+  exitLiveMode();
   invalidateExternalDetails({ closeModal: true, restoreFocus: false });
   externalRecipeController.invalidateCollection();
   dashboardCatalog = recipeCatalog;
@@ -87,6 +121,10 @@ function discoverExternalRecipes(operation, value, { remember = true } = {}) {
 }
 
 function discoverMoreRecipes() {
+  if (recipeMode === 'live') {
+    restoreDiscoveryCollection();
+    return false;
+  }
   const externalStatus = externalRecipeController.getState().status;
   if (state.view !== 'all' || externalStatus !== 'idle') return false;
   discoverExternalRecipes('discoverAll');
@@ -188,8 +226,22 @@ function updateThemeToggle(dark) {
 
 function initializeSearch() {
   const liveSearchButton = $('#mealdb-search-button');
-  liveSearchButton.disabled = true;
-  liveSearchButton.setAttribute('aria-disabled', 'true');
+  liveSearchButton.addEventListener('click', () => {
+    const query = $('#search-input').value.trim();
+    if (!query) {
+      $('#search-input').focus();
+      showToast('Enter a recipe name');
+      return;
+    }
+
+    resetExternalDiscovery();
+    clearFilters();
+    state.view = 'default';
+    recipeMode = 'live';
+    setActiveNavigation('recommended');
+    getLiveDashboard().search(query);
+    $('#recommended').scrollIntoView({ behavior: 'smooth' });
+  });
 
   $('#search-form').addEventListener('submit', (event) => {
     event.preventDefault();
@@ -268,9 +320,16 @@ function initializePageActions() {
     }
 
     if (event.target.closest('[data-external-retry]')) {
-      if (lastExternalOperation) {
+      if (recipeMode === 'live') {
+        liveDashboard?.retry();
+      } else if (lastExternalOperation) {
         discoverExternalRecipes(lastExternalOperation.operation, lastExternalOperation.value, { remember: false });
       }
+      return;
+    }
+
+    if (event.target.closest('[data-back-to-offline]')) {
+      restoreDiscoverView();
       return;
     }
 

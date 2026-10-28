@@ -169,6 +169,8 @@ function renderExternalStatus(externalState) {
   const status = $('#external-status');
   const message = $('#external-status-message');
   const retry = $('#external-retry');
+  const backToOffline = $('#back-to-offline');
+  const attribution = $('#mealdb-attribution');
   const discoverMore = $('#discover-more-recipes');
   const recommended = $('#recommended');
   const currentStatus = externalState?.status || 'idle';
@@ -184,7 +186,9 @@ function renderExternalStatus(externalState) {
   recommended.setAttribute('aria-busy', String(currentStatus === 'loading'));
   status.hidden = currentStatus === 'idle';
   retry.hidden = currentStatus !== 'error';
-  discoverMore.hidden = !showingAll;
+  backToOffline.hidden = !isLiveMealDb;
+  attribution.hidden = !isLiveMealDb;
+  discoverMore.hidden = isLiveMealDb || !showingAll;
   discoverMore.textContent = discoverLabels[currentStatus] || discoverLabels.error;
   discoverMore.setAttribute('aria-disabled', String(currentStatus !== 'idle'));
 
@@ -206,9 +210,10 @@ function renderExternalStatus(externalState) {
 }
 
 export function render(catalog = recipeCatalog, externalState = null) {
+  const isLiveMealDb = externalState?.provider === 'themealdb';
   const favoriteEntries = catalog.resolveFavoriteIds(state.favorites);
   const filteredRecipes = catalog.filter(state.query, state.filter);
-  const visibleRecipes = externalState?.provider === 'themealdb' && state.view !== 'favorites'
+  const visibleRecipes = isLiveMealDb && state.view !== 'favorites'
     ? externalState.recipes
     : state.view === 'favorites'
     ? favoriteEntries.filter(({ resolved }) => resolved).map(({ recipe }) => recipe)
@@ -218,22 +223,28 @@ export function render(catalog = recipeCatalog, externalState = null) {
     ? favoriteEntries.map((entry) => entry.resolved
       ? recipeCard(entry.recipe)
       : unavailableFavoriteCard(entry, catalog, externalState))
-    : (showingFullView ? visibleRecipes : visibleRecipes.slice(0, 4)).map(recipeCard);
+    : (isLiveMealDb || showingFullView ? visibleRecipes : visibleRecipes.slice(0, 4)).map(recipeCard);
   const visibleCount = state.view === 'favorites' ? favoriteEntries.length : visibleRecipes.length;
 
-  $('#recommended-title').textContent = state.view === 'favorites'
+  $('#recommended-title').textContent = isLiveMealDb
+    ? 'TheMealDB search results'
+    : state.view === 'favorites'
     ? '💗 My saved recipes'
     : state.view === 'all'
       ? '🍴 All recipes'
       : '🍴 Recommended for you';
   $('#back-to-discover').hidden = !showingFullView;
-  $('#recommended-view-all').hidden = showingFullView;
+  $('#recommended-view-all').hidden = isLiveMealDb || showingFullView;
   $('#recommended-grid').replaceChildren(...recommendedCards);
   $('#more-grid').replaceChildren(...(showingFullView ? [] : visibleRecipes.slice(4).map(recipeCard)));
-  $('#more-recipes').hidden = showingFullView;
-  $('#empty-state').hidden = visibleCount > 0;
-  $('#empty-title').textContent = state.view === 'favorites' ? 'No saved recipes yet' : 'No recipes found';
-  $('#empty-message').textContent = state.view === 'favorites'
+  $('#more-recipes').hidden = isLiveMealDb || showingFullView;
+  $('#empty-state').hidden = visibleCount > 0 || ['loading', 'error'].includes(externalState?.status);
+  $('#empty-title').textContent = isLiveMealDb
+    ? 'No TheMealDB recipes found'
+    : state.view === 'favorites' ? 'No saved recipes yet' : 'No recipes found';
+  $('#empty-message').textContent = isLiveMealDb
+    ? 'Try another recipe name or return to offline recipes.'
+    : state.view === 'favorites'
     ? 'Save recipes with the heart button and they will appear here.'
     : 'Try another search or clear your filters.';
   $$('.category').forEach((button) => button.classList.toggle('active', button.dataset.filter === state.filter));
