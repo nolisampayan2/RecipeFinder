@@ -58,6 +58,47 @@ assert.match(rendered, /Couscous/);
 assert.match(rendered, /1 cup/);
 assert.match(rendered, /Prepare the couscous/);
 
+assert.equal(modal.closeRecipeModal({ restoreFocus: false }), true);
+trigger.focused = false;
+elements['.modal-close'].focused = false;
+fakeDocument.activeElement = null;
+const liveRecipe = {
+  id: 'external:themealdb:12345',
+  source: 'external',
+  externalProvider: 'themealdb',
+  externalId: '12345',
+  detailLevel: 'full',
+  name: '<img src=x onerror=alert(1)> Live Meal',
+  image: 'https://www.themealdb.com/images/media/meals/fixture.jpg',
+  category: 'Seafood',
+  cuisine: 'Canadian',
+  description: '',
+  ingredients: [['Salmon', '2 fillets'], ['Lemon', '1']],
+  instructions: 'Cook safely.\nServe warm.',
+  tutorial: 'https://www.youtube.com/watch?v=fictional',
+};
+assert.equal(modal.openRecipeDetails(liveRecipe, { trigger }), true);
+assert.equal(fakeDocument.activeElement, elements['.modal-close'], 'Live modal must initially focus its close button');
+const liveContent = elements['#modal-content'].children;
+const liveCopy = liveContent[1];
+assert.equal(liveCopy.children[1].textContent, 'TheMealDB recipe');
+assert.equal(liveCopy.children[3].textContent, liveRecipe.name, 'Hostile provider text must remain inert text');
+assert.match(JSON.stringify(liveContent), /Salmon/);
+assert.match(JSON.stringify(liveContent), /2 fillets/);
+assert.match(JSON.stringify(liveContent), /Seafood/);
+assert.match(JSON.stringify(liveContent), /Canadian/);
+assert.match(JSON.stringify(liveContent), /Cook safely/);
+assert.match(JSON.stringify(liveContent), /https:\/\/www\.youtube\.com\/watch\?v=fictional/);
+assert.equal(liveContent[0].src, liveRecipe.image);
+const liveTutorial = liveCopy.children[5].children[1].children[2];
+assert.equal(liveTutorial.href, liveRecipe.tutorial);
+assert.equal(liveTutorial.target, '_blank');
+assert.equal(liveTutorial.rel, 'noopener noreferrer');
+assert.equal(modal.closeRecipeModal(), true);
+assert.equal(trigger.focused, true, 'Closing live details must restore focus to the exact live-card trigger');
+assert.equal(elements['#recipe-modal'].hidden, true);
+assert.equal(fakeDocument.body.style.overflow, '');
+
 modal.openRecipeDetails({ ...fictional, image: 'javascript:alert(1)', tutorial: 'data:text/html,unsafe' });
 const unsafeMediaContent = elements['#modal-content'].children;
 assert.equal(unsafeMediaContent[0].src, undefined);
@@ -86,6 +127,7 @@ fakeDocument.activeElement = elements['.modal-close'];
 assert.equal(modal.handleRecipeModalTab({ key: 'Tab', shiftKey: true, preventDefault() {} }), true);
 assert.equal(fakeDocument.activeElement, last);
 
+trigger.focused = false;
 modal.openRecipeLoading(trigger);
 assert.equal(modal.closeRecipeModal(), true);
 assert.equal(trigger.focused, true);
@@ -111,8 +153,9 @@ function extractFunction(name) {
 
 const lifecycleFactory = Function(
   'externalSourceRegistry', 'openRecipeLoading', 'openRecipeDetails', 'openRecipeError',
-  'isRecipeModalOpen', 'closeRecipeModal', 'openRecipe',
+  'isRecipeModalOpen', 'closeRecipeModal', 'openRecipe', 'dashboardCatalog', 'initialRecipeMode',
   `let externalDetailGeneration = 0;
+   let recipeMode = initialRecipeMode;
    ${extractFunction('invalidateExternalDetails')}
    ${extractFunction('closeActiveRecipeModal')}
    ${extractFunction('openDemoRecipe')}
@@ -150,6 +193,8 @@ function createLifecycleHarness() {
     () => modalOpen,
     () => { modalOpen = false; events.push('close'); },
     (id) => { modalOpen = true; events.push(`demo:${id}`); return true; },
+    { getById: () => null },
+    'offline',
   );
   return { actions, events, requests };
 }
@@ -185,6 +230,50 @@ navigationRace.actions.invalidateExternalDetails({ closeModal: true, restoreFocu
 navigationRace.requests[0].resolve(fictional);
 await pendingBeforeNavigation;
 assert.equal(navigationRace.events.at(-1), 'close', 'Navigation invalidation must prevent late detail rendering');
+
+let liveRegistryHydrations = 0;
+let liveModalOpen = false;
+let currentLiveRecipe = liveRecipe;
+const liveEvents = [];
+const liveActions = lifecycleFactory(
+  {
+    invalidateDetails() { liveEvents.push('invalidate'); },
+    getDetails() { liveRegistryHydrations += 1; throw new Error('Live details must not hydrate'); },
+  },
+  () => { liveEvents.push('loading'); },
+  (recipe, options) => { liveModalOpen = true; liveEvents.push(`live:${recipe.id}`); return options?.trigger === trigger; },
+  () => { liveEvents.push('error'); },
+  () => liveModalOpen,
+  () => { liveModalOpen = false; liveEvents.push('close'); },
+  () => false,
+  { getById: (id) => id === currentLiveRecipe.id ? currentLiveRecipe : null },
+  'live',
+);
+assert.equal(await liveActions.openExternalRecipe(liveRecipe.id, trigger), true);
+assert.equal(liveEvents.at(-1), `live:${liveRecipe.id}`);
+assert.equal(liveRegistryHydrations, 0, 'Opening live details must not use registry hydration');
+assert.equal(liveEvents.includes('loading'), false, 'In-memory live details must not show a network loading state');
+currentLiveRecipe = { ...liveRecipe, detailLevel: 'summary' };
+assert.equal(await liveActions.openExternalRecipe(liveRecipe.id, trigger), false, 'Summary live records must fail closed');
+currentLiveRecipe = liveRecipe;
+assert.equal(await liveActions.openExternalRecipe('external:themealdb:99999', trigger), false, 'Unknown live IDs must fail closed');
+assert.equal(await liveActions.openExternalRecipe('external:themealdb:not-digits', trigger), false, 'Malformed live IDs must fail closed');
+assert.equal(liveRegistryHydrations, 0);
+liveActions.invalidateExternalDetails({ closeModal: true, restoreFocus: false });
+assert.equal(liveEvents.at(-1), 'close', 'Navigation reset must close live details');
+
+const offlineLiveActions = lifecycleFactory(
+  { invalidateDetails() {}, getDetails() { throw new Error('Stale live IDs must not hydrate'); } },
+  () => { throw new Error('Stale live IDs must not load'); },
+  () => false,
+  () => false,
+  () => false,
+  () => {},
+  () => false,
+  { getById: () => liveRecipe },
+  'offline',
+);
+assert.equal(await offlineLiveActions.openExternalRecipe(liveRecipe.id, trigger), false, 'Live mode is required');
 
 assert.match(appSource, /if \(event\.target\.closest\('\[data-close\]'\)\) closeActiveRecipeModal\(\)/);
 assert.match(appSource, /if \(isRecipeModalOpen\(\)\)[\s\S]*?closeActiveRecipeModal\(\)/);

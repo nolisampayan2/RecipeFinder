@@ -57,7 +57,10 @@ export function openRecipeDetails(recipe, { trigger } = {}) {
   const copy = createElement('div', 'modal-copy');
   if (recipe.source === 'external') {
     copy.append(statusAnnouncement('Recipe details loaded'));
-    copy.append(createElement('span', 'recipe-source', 'Offline recipe preview'));
+    const isLiveMealDb = recipe.externalProvider === 'themealdb'
+      && recipe.detailLevel === 'full'
+      && /^external:themealdb:\d+$/.test(recipe.id);
+    copy.append(createElement('span', 'recipe-source', isLiveMealDb ? 'TheMealDB recipe' : 'Offline recipe preview'));
   }
   const tags = createElement('div', 'tags');
   tags.append(createElement('span', 'tag', recipe.category), createElement('span', 'tag alt', recipe.cuisine));

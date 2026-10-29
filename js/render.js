@@ -50,6 +50,9 @@ function configureRecipeImage(image, recipe, className, alt = recipe.name) {
 function recipeCard(recipe) {
   const isExternal = recipe.source === 'external';
   const isLiveMealDb = isExternal && recipe.externalProvider === 'themealdb';
+  const hasLiveDetails = isLiveMealDb
+    && recipe.detailLevel === 'full'
+    && /^external:themealdb:\d+$/.test(recipe.id);
   const hasOfflineDetails = isExternal
     && recipe.externalProvider === 'fictional-offline'
     && /^external:fictional-offline:\d+$/.test(recipe.id);
@@ -74,15 +77,15 @@ function recipeCard(recipe) {
   const tags = createElement('div', 'tags');
   tags.append(createElement('span', 'tag', recipe.category), createElement('span', 'tag alt', recipe.cuisine));
   const description = recipe.description || (isLiveMealDb
-    ? 'Live recipe details are not available in this preview.'
+    ? hasLiveDetails ? 'View ingredients and cooking instructions.' : 'Live recipe details are not available.'
     : isExternal ? 'Recipe details are reserved for a later offline preview.' : '');
   body.append(tags, createElement('h3', '', recipe.name), createElement('p', '', description));
 
   const viewButton = createElement('button', 'view-btn', 'View recipe →');
   viewButton.type = 'button';
-  if (hasOfflineDetails) {
+  if (hasOfflineDetails || hasLiveDetails) {
     viewButton.dataset.externalView = recipe.id;
-    viewButton.setAttribute('aria-label', `View offline details for ${recipe.name}`);
+    viewButton.setAttribute('aria-label', `${hasLiveDetails ? 'View TheMealDB recipe' : 'View offline details'} for ${recipe.name}`);
   } else if (isExternal) {
     setSafeText(viewButton, isLiveMealDb ? 'Details unavailable' : 'Preview only');
     viewButton.disabled = true;

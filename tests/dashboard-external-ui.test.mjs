@@ -197,6 +197,9 @@ class FakeElement {
     this.className = '';
     this.textContent = '';
     this.hidden = false;
+    this.disabled = false;
+    this.isConnected = true;
+    this.focused = false;
     this.listeners = new Map();
     this.classList = {
       add: (...names) => { this.className = [...new Set([...this.className.split(' ').filter(Boolean), ...names])].join(' '); },
@@ -214,6 +217,12 @@ class FakeElement {
   replaceChildren(...children) { this.children = [...children]; }
   setAttribute(name, value) { this.attributes[name] = String(value); }
   getAttribute(name) { return this.attributes[name] ?? null; }
+  focus() { globalThis.document.activeElement = this; this.focused = true; }
+  querySelectorAll() { return this.focusables || []; }
+  contains(element) { return this === element || (this.focusables || []).includes(element); }
+  closest(selector) {
+    return selector === '[data-external-view]' && this.dataset.externalView ? this : null;
+  }
   addEventListener(type, listener) {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
     this.listeners.get(type).push(listener);
@@ -226,8 +235,12 @@ const elementIds = [
   'discover-more-recipes', 'back-to-offline', 'mealdb-attribution',
   'recommended', 'recommended-title', 'back-to-discover', 'recommended-view-all', 'recommended-grid',
   'more-grid', 'more-recipes', 'empty-state', 'empty-title', 'empty-message', 'toast',
+  'recipe-modal', 'modal-content',
 ];
 const fakeElements = new Map(elementIds.map((id) => [`#${id}`, new FakeElement()]));
+fakeElements.set('.modal-close', new FakeElement('button'));
+fakeElements.get('#recipe-modal').hidden = true;
+fakeElements.get('#recipe-modal').focusables = [fakeElements.get('.modal-close')];
 const originalDocument = globalThis.document;
 const originalLocalStorage = globalThis.localStorage;
 const hostileIds = [
@@ -240,6 +253,8 @@ const hostileIds = [
 const storedFavoriteIds = ['lemon-chicken', ...hostileIds];
 const storageWrites = [];
 globalThis.document = {
+  activeElement: null,
+  body: { style: {} },
   createElement: (tagName) => new FakeElement(tagName),
   querySelector: (selector) => fakeElements.get(selector) || null,
   querySelectorAll: () => [],
@@ -300,8 +315,9 @@ assert.equal(liveCard.dataset.id, liveRecipe.id);
 assert.equal(liveCard.children.some((child) => child.className.includes('heart')), false, 'Live recipes must not expose favorites');
 const liveBody = liveCard.children.at(-1);
 assert.equal(liveBody.children[0].textContent, 'TheMealDB recipe');
-assert.equal(liveBody.children.at(-1).disabled, true, 'Live details must remain unavailable');
-assert.equal(liveBody.children.at(-1).dataset.externalView, undefined);
+assert.notEqual(liveBody.children.at(-1).disabled, true, 'Full live recipes must expose details');
+assert.equal(liveBody.children.at(-1).dataset.externalView, liveRecipe.id);
+assert.match(liveBody.children.at(-1).attributes['aria-label'], /View TheMealDB recipe/);
 assert.match(fakeElements.get('#external-status-message').textContent, /Results provided by TheMealDB/);
 assert.equal(fakeElements.get('#mealdb-attribution').hidden, false);
 assert.equal(fakeElements.get('#back-to-offline').hidden, false);
@@ -309,6 +325,60 @@ assert.equal(fakeElements.get('#discover-more-recipes').hidden, true);
 assert.equal(fakeElements.get('#recommended-view-all').hidden, true);
 assert.equal(fakeElements.get('#more-recipes').hidden, true);
 assert.equal(fakeElements.get('#recommended-title').textContent, 'TheMealDB search results');
+
+const modalModule = await import(`../js/modal.js?live-click=${Date.now()}`);
+const extractAppFunction = (name) => {
+  const match = appSource.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?^\\}`, 'm'));
+  assert.ok(match, `Expected ${name} in app.js`);
+  return match[0];
+};
+const pageClickBody = appSource.match(/document\.addEventListener\('click', \(event\) => \{([\s\S]*?)\n  \}\);/)?.[1] || '';
+assert.ok(pageClickBody, 'Expected the production delegated click handler');
+let liveRegistryHydrations = 0;
+const liveClickHarness = Function(
+  'dashboardCatalog', 'externalSourceRegistry', 'openRecipeDetails', 'openRecipeLoading', 'openRecipeError',
+  'isRecipeModalOpen', 'closeRecipeModal', 'openRecipe',
+  `let externalDetailGeneration = 0;
+   let recipeMode = 'live';
+   ${extractAppFunction('invalidateExternalDetails')}
+   ${extractAppFunction('openExternalRecipe')}
+   const handlePageClick = (event) => {${pageClickBody}
+   };
+   return { handlePageClick };`,
+)(
+  recipeCatalog.withRecipes([liveRecipe]),
+  {
+    invalidateDetails() {},
+    getDetails() { liveRegistryHydrations += 1; throw new Error('Live details must not hydrate'); },
+  },
+  modalModule.openRecipeDetails,
+  modalModule.openRecipeLoading,
+  modalModule.openRecipeError,
+  modalModule.isRecipeModalOpen,
+  modalModule.closeRecipeModal,
+  modalModule.openRecipe,
+);
+const liveViewButton = liveBody.children.at(-1);
+const fetchCallsBeforeLiveDetails = fetchCalls;
+liveClickHarness.handlePageClick({ target: liveViewButton });
+assert.equal(fakeElements.get('#recipe-modal').hidden, false, 'Delegated live-card click must open the real modal');
+assert.match(JSON.stringify(fakeElements.get('#modal-content')), /Safe Live Fixture/);
+assert.match(JSON.stringify(fakeElements.get('#modal-content')), /TheMealDB recipe/);
+assert.equal(liveRegistryHydrations, 0, 'Delegated live-card click must not hydrate through the registry');
+assert.equal(fetchCalls, fetchCallsBeforeLiveDetails, 'Delegated live-card click must not fetch or look up details');
+modalModule.closeRecipeModal({ restoreFocus: false });
+
+for (const unavailableLiveRecipe of [
+  { ...liveRecipe, id: 'external:themealdb:12346', externalId: '12346', detailLevel: 'summary' },
+  { ...liveRecipe, id: 'external:themealdb:not-digits', externalId: 'not-digits' },
+]) {
+  renderModule.render(recipeCatalog.withRecipes([unavailableLiveRecipe]), {
+    provider: 'themealdb', status: 'ready', recipes: [unavailableLiveRecipe], error: null, generation: 8,
+  });
+  const unavailableButton = fakeElements.get('#recommended-grid').children[0].children.at(-1).children.at(-1);
+  assert.equal(unavailableButton.disabled, true, 'Summary and malformed live recipes must fail closed');
+  assert.equal(unavailableButton.dataset.externalView, undefined);
+}
 
 renderModule.render(recipeCatalog, { status: 'empty', recipes: [], error: null, generation: 2 });
 assert.equal(discoverAction.textContent, 'No More Offline Recipes');

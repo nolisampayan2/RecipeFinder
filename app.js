@@ -61,6 +61,19 @@ function openDemoRecipe(id, trigger) {
 
 async function openExternalRecipe(id, trigger) {
   invalidateExternalDetails();
+  const isMealDbIdentity = typeof id === 'string' && id.startsWith('external:themealdb:');
+  if (recipeMode === 'live' || isMealDbIdentity) {
+    if (recipeMode !== 'live' || !/^external:themealdb:\d+$/.test(id)) return false;
+    const recipe = dashboardCatalog.getById(id);
+    if (
+      recipe?.id !== id
+      || recipe.source !== 'external'
+      || recipe.externalProvider !== 'themealdb'
+      || recipe.detailLevel !== 'full'
+    ) return false;
+    return openRecipeDetails(recipe, { trigger });
+  }
+  if (!/^external:fictional-offline:\d+$/.test(id)) return false;
   const generation = externalDetailGeneration;
   openRecipeLoading(trigger);
   try {
