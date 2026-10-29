@@ -2,7 +2,10 @@ import { createPkceBrowserInitializer } from './supabase-browser.js';
 import {
   CONFIRMATION_MESSAGES,
   CONFIRMATION_STATUS,
+  confirmationResultView,
   createPkceConfirmationController,
+  renderCallbackView,
+  takePreparedAuthCallbackRequest,
 } from './auth-callback.js';
 import { createPkceCodeExchangeAdapter } from './auth-callback-exchange.js';
 
@@ -32,6 +35,22 @@ function unavailableConfirmation() {
   });
 }
 
+function normalizeConfirmation(result) {
+  return Object.freeze(result?.status === CONFIRMATION_STATUS.CONFIRMED
+    ? { status: CONFIRMATION_STATUS.CONFIRMED, message: CONFIRMATION_MESSAGES.CONFIRMED }
+    : { status: CONFIRMATION_STATUS.UNAVAILABLE, message: CONFIRMATION_MESSAGES.UNAVAILABLE });
+}
+
+function hasExplicitSuccess(result) {
+  return Boolean(
+    result
+    && typeof result === 'object'
+    && !Array.isArray(result)
+    && Object.prototype.hasOwnProperty.call(result, 'error')
+    && result.error === null
+  );
+}
+
 export function createManualLoginConfirmationOrchestration({
   client,
   preparedCallback,
@@ -58,13 +77,13 @@ export function createManualLoginConfirmationOrchestration({
             const exchangeCode = createExchangeAdapter(client);
             const exchangeAndClearSession = async (code) => {
               const exchangeResult = await exchangeCode(code);
-              if (exchangeResult?.error || !exchangeResult?.data?.confirmed) {
+              if (!hasExplicitSuccess(exchangeResult) || exchangeResult.data?.confirmed !== true) {
                 return Object.freeze({ data: null, error: true });
               }
 
               try {
                 const signOutResult = await client.auth.signOut({ scope: 'local' });
-                if (!signOutResult || typeof signOutResult !== 'object' || signOutResult.error) {
+                if (!hasExplicitSuccess(signOutResult)) {
                   return Object.freeze({ data: null, error: true });
                 }
               } catch {
@@ -86,6 +105,90 @@ export function createManualLoginConfirmationOrchestration({
       }
 
       return activationPromise;
+    },
+  });
+}
+
+/**
+ * Prepares one explicit callback exchange lifecycle without connecting it to
+ * page initialization. Construction and import perform no Auth operation.
+ */
+export function createCallbackConfirmationComposition({
+  preparedCallback,
+  takePreparedCallback = takePreparedAuthCallbackRequest,
+  clientInitialization,
+  clientDependencies,
+  root,
+  createClientInitialization = createCallbackClientInitialization,
+  createOrchestration = createManualLoginConfirmationOrchestration,
+  renderView = renderCallbackView,
+  createView = confirmationResultView,
+} = {}) {
+  let preparedClientInitialization = clientInitialization ?? null;
+  let callbackConsumed = false;
+  let activationPromise = null;
+  let generation = 0;
+  let cleanedUp = false;
+
+  return Object.freeze({
+    activate() {
+      if (!activationPromise) {
+        const activationGeneration = ++generation;
+        activationPromise = (async () => {
+          if (
+            cleanedUp
+            || !root
+            || typeof createClientInitialization !== 'function'
+            || typeof createOrchestration !== 'function'
+            || typeof renderView !== 'function'
+            || typeof createView !== 'function'
+          ) return unavailableConfirmation();
+
+          let callbackRequest = null;
+          if (!callbackConsumed) {
+            callbackConsumed = true;
+            if (preparedCallback) {
+              callbackRequest = preparedCallback;
+              preparedCallback = null;
+            } else if (typeof takePreparedCallback === 'function') {
+              callbackRequest = takePreparedCallback();
+            }
+          }
+
+          try {
+            if (!preparedClientInitialization) {
+              preparedClientInitialization = createClientInitialization(clientDependencies);
+            }
+            const client = preparedClientInitialization?.initialize?.();
+            const orchestration = createOrchestration({ client, preparedCallback: callbackRequest });
+            const result = normalizeConfirmation(await orchestration?.activate?.());
+
+            if (!cleanedUp && activationGeneration === generation) {
+              renderView(root, createView(result));
+            }
+            return result;
+          } catch {
+            const result = unavailableConfirmation();
+            if (!cleanedUp && activationGeneration === generation) {
+              try {
+                renderView(root, createView(result));
+              } catch {
+                // Rendering failures must not expose provider or callback details.
+              }
+            }
+            return result;
+          }
+        })();
+      }
+
+      return activationPromise;
+    },
+
+    cleanup() {
+      if (cleanedUp) return false;
+      cleanedUp = true;
+      generation += 1;
+      return true;
     },
   });
 }

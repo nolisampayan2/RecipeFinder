@@ -1,6 +1,7 @@
 const SENSITIVE_QUERY_KEYS = new Set(['code', 'token_hash']);
 const PROVIDER_ERROR_KEYS = new Set(['error', 'error_code', 'error_description']);
 const TOKEN_FRAGMENT_KEYS = new Set(['access_token', 'refresh_token']);
+const SUPPORTED_FRAGMENT_KEYS = new Set([...PROVIDER_ERROR_KEYS, ...TOKEN_FRAGMENT_KEYS]);
 
 export const CONFIRMATION_STATUS = Object.freeze({
   CONFIRMED: 'confirmed',
@@ -38,9 +39,11 @@ export function classifyAuthCallback(input) {
   const hasTokenHash = query.has('token_hash');
   const hasProviderError = hasKey(query, PROVIDER_ERROR_KEYS) || hasKey(fragment, PROVIDER_ERROR_KEYS);
   const hasTokenFragment = hasKey(fragment, TOKEN_FRAGMENT_KEYS);
+  const hasUnsupportedFragment = [...fragment.keys()].some((key) => !SUPPORTED_FRAGMENT_KEYS.has(key));
   const detectedKinds = [hasCode, hasTokenHash, hasProviderError, hasTokenFragment].filter(Boolean).length;
 
   if (
+    hasUnsupportedFragment ||
     detectedKinds > 1 ||
     hasDuplicate(query, SENSITIVE_QUERY_KEYS) ||
     hasDuplicate(query, PROVIDER_ERROR_KEYS) ||
@@ -69,8 +72,12 @@ export function cleanCallbackUrl(locationLike, historyLike) {
 
   const cleanPath = locationLike.pathname || '/';
   if (!locationLike.search && !locationLike.hash) return false;
-  historyLike.replaceState(null, '', cleanPath);
-  return true;
+  try {
+    historyLike.replaceState(null, '', cleanPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function prepareAuthCallbackRequest(locationLike, historyLike) {
@@ -86,7 +93,11 @@ export function prepareAuthCallbackRequest(locationLike, historyLike) {
   }
 
   const scrubbed = cleanCallbackUrl(locationLike, historyLike);
-  return Object.freeze({ kind: classification.kind, authorizationCode, scrubbed });
+  return Object.freeze({
+    kind: classification.kind,
+    authorizationCode: scrubbed ? authorizationCode : '',
+    scrubbed,
+  });
 }
 
 export function createPkceConfirmationController({ exchangeAuthorizationCode } = {}) {
@@ -115,9 +126,16 @@ export function createPkceConfirmationController({ exchangeAuthorizationCode } =
 
       processingPromise = Promise.resolve()
         .then(() => exchangeAuthorizationCode(callbackRequest.authorizationCode))
-        .then((result) => Object.freeze(!result || typeof result !== 'object' || result.error || !result.data
+        .then((result) => Object.freeze(
+          !result
+          || typeof result !== 'object'
+          || Array.isArray(result)
+          || !Object.prototype.hasOwnProperty.call(result, 'error')
+          || result.error !== null
+          || result.data?.confirmed !== true
           ? { status: CONFIRMATION_STATUS.UNAVAILABLE, message: CONFIRMATION_MESSAGES.UNAVAILABLE }
-          : { status: CONFIRMATION_STATUS.CONFIRMED, message: CONFIRMATION_MESSAGES.CONFIRMED }))
+          : { status: CONFIRMATION_STATUS.CONFIRMED, message: CONFIRMATION_MESSAGES.CONFIRMED }
+        ))
         .catch(() => Object.freeze({
           status: CONFIRMATION_STATUS.UNAVAILABLE,
           message: CONFIRMATION_MESSAGES.UNAVAILABLE,
@@ -143,6 +161,24 @@ export function callbackView(kind) {
     kicker: 'Offline foundation',
     title: 'Confirmation unavailable',
     message: 'A supported confirmation link was detected, but it was not processed because authentication is not active yet.',
+  });
+}
+
+export function confirmationResultView(result) {
+  if (result?.status === CONFIRMATION_STATUS.CONFIRMED) {
+    return Object.freeze({
+      icon: '✓',
+      kicker: 'Email confirmed',
+      title: 'Confirmation complete',
+      message: CONFIRMATION_MESSAGES.CONFIRMED,
+    });
+  }
+
+  return Object.freeze({
+    icon: '!',
+    kicker: 'Confirmation unavailable',
+    title: 'Confirmation unavailable',
+    message: CONFIRMATION_MESSAGES.UNAVAILABLE,
   });
 }
 

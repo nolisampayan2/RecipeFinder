@@ -6,6 +6,7 @@ import {
   callbackView,
   classifyAuthCallback,
   cleanCallbackUrl,
+  confirmationResultView,
   createPkceConfirmationController,
   initializeAuthCallback,
   prepareAuthCallbackRequest,
@@ -108,6 +109,8 @@ for (const unavailableCase of [
 assert.equal(callbackClientCreations, 2, 'Failed callback page initialization must not reach the SDK');
 
 assert.deepEqual(classifyAuthCallback(`${callback}?code=${secret}`), { kind: 'pkce' });
+assert.deepEqual(classifyAuthCallback(`${callback}?code=${secret}#unexpected=value`), { kind: 'invalid' });
+assert.deepEqual(classifyAuthCallback(`${callback}?code=${secret}#arbitrary=one&other=two`), { kind: 'invalid' });
 assert.deepEqual(classifyAuthCallback(callback), { kind: 'none' });
 assert.deepEqual(classifyAuthCallback(`${callback}?code=`), { kind: 'invalid' });
 assert.deepEqual(classifyAuthCallback(`${callback}?code=one&code=two`), { kind: 'invalid' });
@@ -129,6 +132,9 @@ assert.equal(
 );
 assert.deepEqual(replacements, [[null, '', '/RecipeFinder/auth-callback.html']]);
 assert.equal(JSON.stringify(replacements).includes(secret), false, 'URL cleanup must not retain callback secrets');
+assert.equal(cleanCallbackUrl({ pathname: '/RecipeFinder/auth-callback.html', search: '?code=fixture', hash: '' }, {
+  replaceState() { throw new Error('offline history failure'); },
+}), false, 'History failures must fail closed');
 
 const mutablePreparationLocation = {
   href: `${callback}?code=${secret}`,
@@ -148,6 +154,8 @@ assert.equal(mutablePreparationLocation.href, callback, 'The URL must be cleaned
 for (const invalidUrl of [
   `${callback}?code=one&code=two`,
   `${callback}?code=one&token_hash=two&type=email`,
+  `${callback}?code=${secret}#unexpected=value`,
+  `${callback}?code=${secret}#arbitrary=one&other=two`,
   `${callback}?token_hash=${secret}&type=email`,
   `${callback}#access_token=${secret}&refresh_token=${secret}`,
 ]) {
@@ -162,6 +170,28 @@ for (const invalidUrl of [
   assert.equal(prepared.authorizationCode, '');
   assert.equal(prepared.scrubbed, true);
 }
+
+let unsupportedFragmentExchangeCalls = 0;
+const unsupportedFragmentContext = callbackContext(`${callback}?code=${secret}#unexpected=value`);
+const unsupportedFragmentPreparation = prepareAuthCallbackRequest(
+  unsupportedFragmentContext.context.location,
+  unsupportedFragmentContext.context.history
+);
+const unsupportedFragmentController = createPkceConfirmationController({
+  exchangeAuthorizationCode: async () => { unsupportedFragmentExchangeCalls += 1; },
+});
+assert.deepEqual(await unsupportedFragmentController.process({
+  preparedCallback: unsupportedFragmentPreparation,
+}), {
+  status: CONFIRMATION_STATUS.UNAVAILABLE,
+  message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+});
+assert.equal(unsupportedFragmentExchangeCalls, 0, 'Unsupported fragments must never reach code exchange');
+assert.deepEqual(
+  unsupportedFragmentContext.cleanupCalls,
+  [[null, '', '/RecipeFinder/auth-callback.html']],
+  'Rejected callbacks must still be scrubbed completely'
+);
 
 function callbackContext(url) {
   const parsed = new URL(url);
@@ -188,7 +218,7 @@ const confirmationController = createPkceConfirmationController({
     exchangeCalls += 1;
     cleanupObservedBeforeExchange = validContext.cleanupCalls.length === 1;
     assert.equal(code, secret);
-    return { data: { session: { access_token: 'fake-session-value' } }, error: null };
+    return { data: { confirmed: true }, error: null };
   },
 });
 const preparedValidCallback = prepareAuthCallbackRequest(validContext.context.location, validContext.context.history);
@@ -202,6 +232,41 @@ assert.deepEqual(await firstProcessing, {
 assert.equal(exchangeCalls, 1, 'A controller must exchange at most once');
 assert.equal(cleanupObservedBeforeExchange, true, 'The callback URL must be scrubbed before exchange');
 assert.deepEqual(validContext.cleanupCalls, [[null, '', '/RecipeFinder/auth-callback.html']]);
+
+for (const malformedSuccess of [
+  { data: { confirmed: true } },
+  { data: { confirmed: true }, error: undefined },
+  { data: {}, error: null },
+  { data: { confirmed: false }, error: null },
+  { data: { confirmed: true }, error: true },
+]) {
+  const strictController = createPkceConfirmationController({
+    exchangeAuthorizationCode: async () => malformedSuccess,
+  });
+  assert.deepEqual(await strictController.process({
+    preparedCallback: { kind: 'pkce', authorizationCode: 'strict-contract-code', scrubbed: true },
+  }), {
+    status: CONFIRMATION_STATUS.UNAVAILABLE,
+    message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+  });
+}
+
+let scrubFailureExchangeCalls = 0;
+const scrubFailureContext = callbackContext(`${callback}?code=scrub-failure-code`);
+scrubFailureContext.context.history.replaceState = () => { throw new Error('offline scrub failure'); };
+const scrubFailurePreparation = prepareAuthCallbackRequest(
+  scrubFailureContext.context.location,
+  scrubFailureContext.context.history
+);
+assert.deepEqual(scrubFailurePreparation, { kind: 'pkce', authorizationCode: '', scrubbed: false });
+const scrubFailureController = createPkceConfirmationController({
+  exchangeAuthorizationCode: async () => { scrubFailureExchangeCalls += 1; },
+});
+assert.deepEqual(await scrubFailureController.process({ preparedCallback: scrubFailurePreparation }), {
+  status: CONFIRMATION_STATUS.UNAVAILABLE,
+  message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+});
+assert.equal(scrubFailureExchangeCalls, 0, 'A callback must not exchange when URL scrubbing fails');
 
 const failedContext = callbackContext(`${callback}?code=fake-failure-code`);
 const failedController = createPkceConfirmationController({
@@ -277,6 +342,8 @@ assert.equal([...nodes.values()].some((node) => node.textContent.includes(secret
 const invalid = callbackView('provider-error');
 assert.equal(invalid.title, 'Invalid or expired link');
 assert.equal(JSON.stringify(invalid).includes(secret), false);
+assert.equal(confirmationResultView({ status: CONFIRMATION_STATUS.CONFIRMED }).title, 'Confirmation complete');
+assert.equal(confirmationResultView({ status: CONFIRMATION_STATUS.UNAVAILABLE }).title, 'Confirmation unavailable');
 
 const initializationReplacements = [];
 const fakeDocument = { querySelector: (selector) => nodes.get(selector) || null };
