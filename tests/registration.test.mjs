@@ -89,6 +89,9 @@ const compositionClient = {
       compositionSignUpCalls += 1;
       return { data: { user: { id: 'composition-user' }, session: null }, error: null };
     },
+    async signOut() {
+      return { error: null };
+    },
   },
 };
 const composition = createRegistrationComposition({
@@ -439,6 +442,9 @@ const fakeClient = {
       receivedCredentials = credentials;
       return { data: { user: { id: 'offline-test-user' }, session: null }, error: null };
     },
+    async signOut() {
+      return { error: null };
+    },
   },
 };
 const service = createRegistrationService(fakeClient);
@@ -459,20 +465,153 @@ assert.doesNotMatch(submitted.message, /account (?:was )?created|already exists|
 assert.equal(submitted.message.includes(validInput.email.trim()), false);
 
 const errorService = createRegistrationService({
-  auth: { signUp: async () => ({ data: null, error: new Error('User already registered') }) },
+  auth: {
+    signUp: async () => ({ data: null, error: new Error('User already registered') }),
+    signOut: async () => ({ error: null }),
+  },
 });
 assert.deepEqual(await errorService.submit(validInput), {
   status: REGISTRATION_STATUS.UNAVAILABLE,
   message: REGISTRATION_MESSAGES.UNAVAILABLE,
 });
 
+let unexpectedSessionSignOutCalls = 0;
 const sessionService = createRegistrationService({
-  auth: { signUp: async () => ({ data: { session: { access_token: 'offline-placeholder' } }, error: null }) },
+  auth: {
+    signUp: async () => ({
+      data: { session: { access_token: 'offline-placeholder', refresh_token: 'offline-refresh-placeholder' } },
+      error: null,
+    }),
+    signOut: async (options) => {
+      unexpectedSessionSignOutCalls += 1;
+      assert.deepEqual(options, { scope: 'local' });
+      return { error: null };
+    },
+  },
 });
 assert.deepEqual(await sessionService.submit(validInput), {
   status: REGISTRATION_STATUS.CONFIGURATION_MISMATCH,
   message: REGISTRATION_MESSAGES.CONFIGURATION_MISMATCH,
 });
+assert.equal(unexpectedSessionSignOutCalls, 1, 'An unexpected session must trigger exactly one local sign-out');
+
+for (const signOutResult of [null, undefined, [], {}, { error: undefined }, { error: true }]) {
+  let signOutCalls = 0;
+  const cleanupFailureService = createRegistrationService({
+    auth: {
+      signUp: async () => ({ data: { session: { access_token: 'offline-session' } }, error: null }),
+      signOut: async () => {
+        signOutCalls += 1;
+        return signOutResult;
+      },
+    },
+  });
+  assert.deepEqual(await cleanupFailureService.submit(validInput), {
+    status: REGISTRATION_STATUS.UNAVAILABLE,
+    message: REGISTRATION_MESSAGES.UNAVAILABLE,
+  });
+  assert.equal(signOutCalls, 1, 'Malformed local sign-out results must not be retried');
+}
+
+for (const signOut of [
+  () => { throw new Error('raw synchronous sign-out detail'); },
+  () => Promise.reject(new Error('raw rejected sign-out detail')),
+]) {
+  const cleanupExceptionService = createRegistrationService({
+    auth: {
+      signUp: async () => ({ data: { session: { access_token: 'offline-session' } }, error: null }),
+      signOut,
+    },
+  });
+  const result = await cleanupExceptionService.submit(validInput);
+  assert.deepEqual(result, {
+    status: REGISTRATION_STATUS.UNAVAILABLE,
+    message: REGISTRATION_MESSAGES.UNAVAILABLE,
+  });
+  assert.doesNotMatch(JSON.stringify(result), /synchronous|rejected|sign-out detail/i);
+}
+
+for (const malformedResponse of [
+  null,
+  undefined,
+  false,
+  'malformed-response',
+  [],
+  {},
+  { data: { session: null } },
+  { data: { session: null }, error: undefined },
+  { data: null, error: null },
+  { data: {}, error: null },
+  { data: { session: undefined }, error: null },
+]) {
+  let signOutCalls = 0;
+  const malformedService = createRegistrationService({
+    auth: {
+      signUp: async () => malformedResponse,
+      signOut: async () => {
+        signOutCalls += 1;
+        return { error: null };
+      },
+    },
+  });
+  assert.deepEqual(await malformedService.submit(validInput), {
+    status: REGISTRATION_STATUS.UNAVAILABLE,
+    message: REGISTRATION_MESSAGES.UNAVAILABLE,
+  });
+  assert.equal(signOutCalls, 0, 'Responses without session evidence must not sign out');
+}
+
+for (const malformedSessionResponse of [
+  { data: { session: { access_token: 'possible-session' } } },
+  { data: { session: { access_token: 'possible-session' } }, error: undefined },
+  { data: { session: { access_token: 'possible-session' } }, error: new Error('raw provider detail') },
+  Object.assign([], { data: { session: { access_token: 'possible-session' } }, error: null }),
+  { data: Object.assign([], { session: { access_token: 'possible-session' } }), error: null },
+  { data: { session: false }, error: null },
+  { data: { session: 'possible-session' }, error: null },
+]) {
+  let signOutCalls = 0;
+  const malformedSessionService = createRegistrationService({
+    auth: {
+      signUp: async () => malformedSessionResponse,
+      signOut: async (options) => {
+        signOutCalls += 1;
+        assert.deepEqual(options, { scope: 'local' });
+        return { error: null };
+      },
+    },
+  });
+  const result = await malformedSessionService.submit(validInput);
+  assert.deepEqual(result, {
+    status: REGISTRATION_STATUS.UNAVAILABLE,
+    message: REGISTRATION_MESSAGES.UNAVAILABLE,
+  });
+  assert.equal(signOutCalls, 1, 'Malformed responses with session evidence require one cleanup attempt');
+  assert.equal(JSON.stringify(result).includes('possible-session'), false);
+  assert.equal(JSON.stringify(result).includes('raw provider detail'), false);
+}
+
+let neverSettlingSignUpCalls = 0;
+let neverSettlingSignOutCalls = 0;
+const neverSettlingSignOut = new Promise(() => {});
+const neverSettlingCleanupService = createRegistrationService({
+  auth: {
+    signUp: async () => {
+      neverSettlingSignUpCalls += 1;
+      return { data: { session: { access_token: 'offline-pending-session' } }, error: null };
+    },
+    signOut: () => {
+      neverSettlingSignOutCalls += 1;
+      return neverSettlingSignOut;
+    },
+  },
+});
+void neverSettlingCleanupService.submit(validInput);
+await Promise.resolve();
+await Promise.resolve();
+assert.deepEqual(await neverSettlingCleanupService.submit(validInput), { status: REGISTRATION_STATUS.PENDING });
+assert.equal(neverSettlingSignUpCalls, 1, 'Pending cleanup must suppress duplicate signup');
+assert.equal(neverSettlingSignOutCalls, 1, 'Pending cleanup must not be duplicated');
 
 let releaseRequest;
 let callCount = 0;
@@ -484,6 +623,7 @@ const pendingService = createRegistrationService({
         releaseRequest = () => resolve({ data: { session: null }, error: null });
       });
     },
+    signOut: async () => ({ error: null }),
   },
 });
 const firstRequest = pendingService.submit(validInput);
@@ -493,6 +633,10 @@ releaseRequest();
 await firstRequest;
 
 assert.throws(() => createRegistrationService(null), /client is required/i);
+assert.throws(
+  () => createRegistrationService({ auth: { signUp: async () => ({ data: { session: null }, error: null }) } }),
+  /client is required/i
+);
 assert.throws(
   () => createRegistrationService(fakeClient, { callbackUrl: 'https://evil.example/callback' }),
   /not approved/i

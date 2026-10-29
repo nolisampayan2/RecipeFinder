@@ -15,6 +15,40 @@ export const REGISTRATION_MESSAGES = Object.freeze({
   CONFIGURATION_MISMATCH: 'Account registration is unavailable while confirmation settings are reviewed.',
 });
 
+const UNAVAILABLE_RESULT = Object.freeze({
+  status: REGISTRATION_STATUS.UNAVAILABLE,
+  message: REGISTRATION_MESSAGES.UNAVAILABLE,
+});
+
+function isNonArrayObject(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function hasExplicitSuccess(response) {
+  return Boolean(
+    isNonArrayObject(response)
+    && Object.prototype.hasOwnProperty.call(response, 'error')
+    && response.error === null
+  );
+}
+
+function hasValidSignupEnvelope(response) {
+  return Boolean(
+    hasExplicitSuccess(response)
+    && Object.prototype.hasOwnProperty.call(response, 'data')
+    && isNonArrayObject(response.data)
+    && Object.prototype.hasOwnProperty.call(response.data, 'session')
+  );
+}
+
+function hasPossibleSession(response) {
+  try {
+    return Boolean(response && typeof response === 'object' && response.data?.session != null);
+  } catch {
+    return false;
+  }
+}
+
 export function isValidEmailAddress(value) {
   return typeof value === 'string' && EMAIL_PATTERN.test(value.trim());
 }
@@ -40,7 +74,11 @@ export function validateRegistrationInput(input = {}) {
 }
 
 export function createRegistrationService(client, { callbackUrl = CALLBACK_URL } = {}) {
-  if (!client?.auth || typeof client.auth.signUp !== 'function') {
+  if (
+    !client?.auth
+    || typeof client.auth.signUp !== 'function'
+    || typeof client.auth.signOut !== 'function'
+  ) {
     throw new TypeError('A Supabase-compatible Auth client is required.');
   }
   if (callbackUrl !== CALLBACK_URL) {
@@ -61,7 +99,7 @@ export function createRegistrationService(client, { callbackUrl = CALLBACK_URL }
 
       requestPending = true;
       try {
-        const { data, error } = await client.auth.signUp({
+        const response = await client.auth.signUp({
           email: validation.values.email,
           password: validation.values.password,
           options: {
@@ -70,19 +108,25 @@ export function createRegistrationService(client, { callbackUrl = CALLBACK_URL }
           },
         });
 
-        if (error) {
-          return Object.freeze({ status: REGISTRATION_STATUS.UNAVAILABLE, message: REGISTRATION_MESSAGES.UNAVAILABLE });
-        }
-        if (data?.session) {
+        if (hasPossibleSession(response)) {
+          const signOutResult = await client.auth.signOut({ scope: 'local' });
+          if (!hasExplicitSuccess(signOutResult)) return UNAVAILABLE_RESULT;
+          if (!hasValidSignupEnvelope(response) || !isNonArrayObject(response.data.session)) {
+            return UNAVAILABLE_RESULT;
+          }
           return Object.freeze({
             status: REGISTRATION_STATUS.CONFIGURATION_MISMATCH,
             message: REGISTRATION_MESSAGES.CONFIGURATION_MISMATCH,
           });
         }
 
+        if (!hasValidSignupEnvelope(response) || response.data.session !== null) {
+          return UNAVAILABLE_RESULT;
+        }
+
         return Object.freeze({ status: REGISTRATION_STATUS.SUBMITTED, message: REGISTRATION_MESSAGES.SUBMITTED });
       } catch {
-        return Object.freeze({ status: REGISTRATION_STATUS.UNAVAILABLE, message: REGISTRATION_MESSAGES.UNAVAILABLE });
+        return UNAVAILABLE_RESULT;
       } finally {
         requestPending = false;
       }
