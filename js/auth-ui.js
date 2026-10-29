@@ -10,6 +10,9 @@ import {
 } from './login.js';
 
 let activeRegistrationController = null;
+let activeRegistrationControllerGeneration = 0;
+let pendingRegistrationOwnerToken = null;
+const registrationControllerOwnerTokens = new WeakMap();
 let activeLoginController = null;
 let activeLoginControllerGeneration = 0;
 let pendingLoginOwnerToken = null;
@@ -86,33 +89,93 @@ export function createRegistrationSubmitController(submitRegistration) {
   }
 
   let requestPending = false;
+  let active = true;
+  let generation = 0;
+  let pendingForm = null;
+  const ownerToken = Symbol('registration-operation-owner');
 
-  return Object.freeze({
+  const controller = Object.freeze({
     async submit(input, { form } = {}) {
-      if (requestPending) return { status: REGISTRATION_STATUS.PENDING };
-
-      requestPending = true;
-      setRegistrationPendingState(form, true);
-
-      try {
-        return await submitRegistration(input);
-      } catch {
-        return {
+      if (!active) {
+        return Object.freeze({
           status: REGISTRATION_STATUS.UNAVAILABLE,
           message: REGISTRATION_MESSAGES.UNAVAILABLE,
-        };
-      } finally {
-        clearRegistrationPasswords(form);
-        setRegistrationPendingState(form, false);
-        requestPending = false;
+        });
       }
+      if (pendingRegistrationOwnerToken && pendingRegistrationOwnerToken !== ownerToken) {
+        return Object.freeze({ status: REGISTRATION_STATUS.PENDING });
+      }
+      if (requestPending) return Object.freeze({ status: REGISTRATION_STATUS.PENDING });
+
+      requestPending = true;
+      pendingRegistrationOwnerToken = ownerToken;
+      pendingForm = form ?? null;
+      const operationGeneration = generation;
+      setRegistrationPendingState(form, true);
+
+      let result;
+      try {
+        result = await submitRegistration(input);
+      } catch {
+        result = Object.freeze({
+          status: REGISTRATION_STATUS.UNAVAILABLE,
+          message: REGISTRATION_MESSAGES.UNAVAILABLE,
+        });
+      } finally {
+        requestPending = false;
+        if (pendingRegistrationOwnerToken === ownerToken) pendingRegistrationOwnerToken = null;
+        const settledForm = pendingForm;
+        pendingForm = null;
+        if (active) setRegistrationPendingState(settledForm, false);
+        if (active && operationGeneration === generation) clearRegistrationPasswords(settledForm);
+      }
+
+      if (!active || operationGeneration !== generation) {
+        return Object.freeze({
+          status: REGISTRATION_STATUS.UNAVAILABLE,
+          message: REGISTRATION_MESSAGES.UNAVAILABLE,
+        });
+      }
+      return result;
+    },
+
+    activate() {
+      if (active) return true;
+      active = true;
+      generation += 1;
+      if (requestPending) setRegistrationPendingState(pendingForm, true);
+      return true;
+    },
+
+    deactivate() {
+      if (!active) return false;
+      active = false;
+      generation += 1;
+      if (requestPending) setRegistrationPendingState(pendingForm, false);
+      return true;
     },
   });
+
+  registrationControllerOwnerTokens.set(controller, ownerToken);
+  return controller;
 }
 
 export function activateRegistrationSubmitController(controller) {
-  if (activeRegistrationController || typeof controller?.submit !== 'function') return false;
+  const ownerToken = registrationControllerOwnerTokens.get(controller);
+  if (
+    activeRegistrationController
+    || (pendingRegistrationOwnerToken && pendingRegistrationOwnerToken !== ownerToken)
+    || typeof controller?.submit !== 'function'
+  ) return false;
   activeRegistrationController = controller;
+  activeRegistrationControllerGeneration += 1;
+  return true;
+}
+
+export function deactivateRegistrationSubmitController(controller) {
+  if (!activeRegistrationController || activeRegistrationController !== controller) return false;
+  activeRegistrationController = null;
+  activeRegistrationControllerGeneration += 1;
   return true;
 }
 
@@ -285,12 +348,18 @@ export function createAuthFormSubmitHandler(form) {
     }
 
     if (form.dataset.authForm === 'register' && activeRegistrationController) {
-      const result = await activeRegistrationController.submit({
+      const controller = activeRegistrationController;
+      const controllerGeneration = activeRegistrationControllerGeneration;
+      const result = await controller.submit({
         displayName: valueOf(form, 'displayName'),
         email: valueOf(form, 'email'),
         password: valueOf(form, 'password'),
         confirmPassword: valueOf(form, 'confirmPassword'),
       }, { form });
+      if (
+        activeRegistrationController !== controller
+        || activeRegistrationControllerGeneration !== controllerGeneration
+      ) return;
       const message = result.message || (result.status === REGISTRATION_STATUS.PENDING
         ? 'Registration is already in progress.'
         : REGISTRATION_MESSAGES.UNAVAILABLE);

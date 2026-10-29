@@ -9,10 +9,15 @@ import {
 import {
   REGISTRATION_CLIENT_STATE,
   createRegistrationClientActivation,
+  createRegistrationComposition,
+  createRegistrationControllerActivation,
   createRegistrationPageInitialization,
 } from '../js/registration-browser.js';
 import {
+  activateRegistrationSubmitController,
+  createAuthFormSubmitHandler,
   createRegistrationSubmitController,
+  deactivateRegistrationSubmitController,
 } from '../js/auth-ui.js';
 
 assert.equal(typeof createRegistrationClientActivation, 'function', 'The inert browser import seam must resolve');
@@ -75,6 +80,46 @@ assert.equal(typeof installedController?.submit, 'function');
 assert.equal(preparedSubmitCalls, 0, 'Explicit activation must not submit registration');
 assert.equal(controllerModule.createRegistrationControllerActivation({}).activate(), false);
 
+let compositionClientInitializations = 0;
+let compositionSignUpCalls = 0;
+let compositionController;
+const compositionClient = {
+  auth: {
+    async signUp() {
+      compositionSignUpCalls += 1;
+      return { data: { user: { id: 'composition-user' }, session: null }, error: null };
+    },
+  },
+};
+const composition = createRegistrationComposition({
+  clientActivation: {
+    activate() {
+      compositionClientInitializations += 1;
+      return compositionClient;
+    },
+  },
+  installController(controller) {
+    compositionController = controller;
+    return true;
+  },
+  removeController(controller) {
+    assert.equal(controller, compositionController);
+    return true;
+  },
+});
+assert.equal(compositionClientInitializations, 0, 'Composition construction must remain import-inert');
+assert.equal(compositionSignUpCalls, 0, 'Composition construction must not call Auth');
+assert.equal(composition.activate(), true, 'Explicit composition activation must prepare the controller');
+assert.equal(composition.activate(), true, 'Composition activation must be idempotent');
+assert.equal(compositionClientInitializations, 1, 'The composed client activation must be cached');
+assert.equal(compositionSignUpCalls, 0, 'Activation alone must not call signUp');
+assert.equal(composition.cleanup(), true);
+assert.equal(composition.cleanup(), false, 'Composition cleanup must be idempotent');
+assert.equal(createRegistrationComposition({}).activate(), false, 'Missing composition dependencies must fail closed');
+assert.equal(createRegistrationComposition({
+  createClientActivation() { throw new Error('offline initializer fixture'); },
+}).activate(), false, 'Synchronous dependency failures must remain contained');
+
 let configLoads = 0;
 const readinessRoot = { dataset: {} };
 const pageInitialization = createRegistrationPageInitialization({
@@ -124,19 +169,53 @@ const validInput = Object.freeze({
   confirmPassword: 'StrongPass1',
 });
 
+class FakeInput {
+  constructor(name, value) {
+    this.name = name;
+    this.value = value;
+    this.attributes = new Map();
+    this.focusCalls = 0;
+  }
+  setAttribute(name, value) { this.attributes.set(name, value); }
+  focus() { this.focusCalls += 1; }
+}
+
+globalThis.HTMLInputElement = FakeInput;
+
 function createFakeForm() {
   const submitButton = { disabled: false };
   const fields = new Map([
-    ['password', { value: validInput.password }],
-    ['confirmPassword', { value: validInput.confirmPassword }],
+    ['displayName', new FakeInput('displayName', validInput.displayName)],
+    ['email', new FakeInput('email', validInput.email)],
+    ['password', new FakeInput('password', validInput.password)],
+    ['confirmPassword', new FakeInput('confirmPassword', validInput.confirmPassword)],
   ]);
+  const errors = new Map([
+    ['displayName', { textContent: '' }],
+    ['email', { textContent: '' }],
+    ['password', { textContent: '' }],
+    ['confirmPassword', { textContent: '' }],
+  ]);
+  const status = {
+    textContent: '',
+    classList: { isError: false, toggle(_name, enabled) { this.isError = enabled; } },
+  };
   const attributes = new Map();
   return {
+    dataset: { authForm: 'register' },
     submitButton,
     fields,
+    errors,
+    status,
     attributes,
     querySelector(selector) {
-      return selector === '[type="submit"]' ? submitButton : null;
+      if (selector === '[type="submit"]') return submitButton;
+      if (selector === '[data-form-status]') return status;
+      if (selector === '[aria-invalid="true"]') {
+        return [...fields.values()].find((field) => field.attributes.get('aria-invalid') === 'true') ?? null;
+      }
+      const match = /^\[data-error-for="(.+)"\]$/.exec(selector);
+      return match ? errors.get(match[1]) ?? null : null;
     },
     elements: { namedItem: (name) => fields.get(name) ?? null },
     setAttribute: (name, value) => attributes.set(name, value),
@@ -183,6 +262,157 @@ assert.deepEqual(await failedController.submit(validInput, { form: failedControl
 });
 assert.equal(failedControllerForm.fields.get('password').value, '');
 assert.throws(() => createRegistrationSubmitController(), /submit function is required/i);
+
+function deferredRegistrationResult() {
+  let resolve;
+  let reject;
+  const promise = new Promise((accept, decline) => {
+    resolve = accept;
+    reject = decline;
+  });
+  return { promise, resolve, reject };
+}
+
+const lifecycleRequests = [];
+let lifecycleServiceCalls = 0;
+let lifecycleController;
+const lifecycleActivation = createRegistrationControllerActivation({
+  registrationService: {
+    submit() {
+      lifecycleServiceCalls += 1;
+      const request = deferredRegistrationResult();
+      lifecycleRequests.push(request);
+      return request.promise;
+    },
+  },
+  createController(submitRegistration) {
+    lifecycleController = createRegistrationSubmitController(submitRegistration);
+    return lifecycleController;
+  },
+});
+assert.equal(lifecycleActivation.activate(), true);
+const lifecycleForm = createFakeForm();
+const lifecycleHandler = createAuthFormSubmitHandler(lifecycleForm);
+const firstLifecycleSubmission = lifecycleHandler({ preventDefault() {} });
+assert.equal(lifecycleServiceCalls, 1);
+assert.equal(lifecycleForm.submitButton.disabled, true);
+assert.equal(lifecycleForm.attributes.get('aria-busy'), 'true');
+assert.equal(lifecycleActivation.cleanup(), true);
+assert.equal(lifecycleForm.submitButton.disabled, false, 'Cleanup must restore the pending button state');
+assert.equal(lifecycleForm.attributes.get('aria-busy'), 'false');
+assert.equal(lifecycleForm.fields.get('password').value, validInput.password, 'Cleanup must not clear passwords');
+assert.equal(lifecycleForm.fields.get('email').focusCalls, 0, 'Cleanup must not move focus');
+assert.equal(lifecycleActivation.activate(), true, 'The same controller context must support reactivation');
+assert.equal(lifecycleForm.submitButton.disabled, true, 'Reactivation must reflect outstanding work');
+assert.deepEqual(await lifecycleController.submit(validInput, { form: createFakeForm() }), {
+  status: REGISTRATION_STATUS.PENDING,
+});
+assert.equal(lifecycleServiceCalls, 1, 'Reactivation must not bypass the outstanding request guard');
+lifecycleRequests[0].resolve({ status: REGISTRATION_STATUS.SUBMITTED, message: REGISTRATION_MESSAGES.SUBMITTED });
+await firstLifecycleSubmission;
+assert.equal(lifecycleForm.status.textContent, '', 'Late success must not publish stale status');
+assert.equal(lifecycleForm.fields.get('password').value, validInput.password, 'Late success must not clear passwords');
+assert.equal(lifecycleForm.fields.get('email').focusCalls, 0, 'Late success must not move focus');
+assert.equal(lifecycleForm.submitButton.disabled, false);
+assert.equal(lifecycleForm.attributes.get('aria-busy'), 'false');
+
+const nextLifecycleSubmission = lifecycleHandler({ preventDefault() {} });
+assert.equal(lifecycleServiceCalls, 2, 'A new explicit submission may proceed after settlement');
+lifecycleRequests[1].resolve({ status: REGISTRATION_STATUS.SUBMITTED, message: REGISTRATION_MESSAGES.SUBMITTED });
+await nextLifecycleSubmission;
+assert.equal(lifecycleForm.status.textContent, REGISTRATION_MESSAGES.SUBMITTED);
+assert.equal(lifecycleForm.fields.get('password').value, '');
+assert.equal(lifecycleActivation.cleanup(), true);
+assert.equal(lifecycleActivation.cleanup(), false);
+assert.equal(lifecycleActivation.activate(), true);
+assert.equal(lifecycleActivation.activate(), true);
+assert.equal(lifecycleActivation.cleanup(), true);
+
+for (const settle of ['failure', 'rejection']) {
+  const request = deferredRegistrationResult();
+  const form = createFakeForm();
+  const activation = createRegistrationControllerActivation({
+    registrationService: { submit: () => request.promise },
+  });
+  assert.equal(activation.activate(), true);
+  const submission = createAuthFormSubmitHandler(form)({ preventDefault() {} });
+  assert.equal(activation.cleanup(), true);
+  if (settle === 'failure') {
+    request.resolve({ status: REGISTRATION_STATUS.UNAVAILABLE, message: REGISTRATION_MESSAGES.UNAVAILABLE });
+  } else {
+    request.reject(new Error('offline rejected registration fixture'));
+  }
+  await submission;
+  assert.equal(form.status.textContent, '', `Late ${settle} must not publish status`);
+  assert.equal(form.fields.get('password').value, validInput.password, `Late ${settle} must not clear passwords`);
+  assert.equal(form.fields.get('email').focusCalls, 0, `Late ${settle} must not move focus`);
+  assert.equal(form.submitButton.disabled, false);
+  assert.equal(form.attributes.get('aria-busy'), 'false');
+}
+
+const synchronousFailureForm = createFakeForm();
+const synchronousFailureController = createRegistrationSubmitController(() => {
+  throw new Error('offline synchronous registration fixture');
+});
+assert.deepEqual(await synchronousFailureController.submit(validInput, { form: synchronousFailureForm }), {
+  status: REGISTRATION_STATUS.UNAVAILABLE,
+  message: REGISTRATION_MESSAGES.UNAVAILABLE,
+});
+assert.equal(synchronousFailureForm.submitButton.disabled, false);
+assert.equal(synchronousFailureForm.attributes.get('aria-busy'), 'false');
+
+const crossContextRequestA = deferredRegistrationResult();
+const crossContextRequestB = deferredRegistrationResult();
+let crossContextCallsA = 0;
+let crossContextCallsB = 0;
+const crossContextActivationA = createRegistrationControllerActivation({
+  registrationService: {
+    submit() {
+      crossContextCallsA += 1;
+      return crossContextRequestA.promise;
+    },
+  },
+});
+assert.equal(crossContextActivationA.activate(), true);
+const crossContextFormA = createFakeForm();
+const crossContextSubmissionA = createAuthFormSubmitHandler(crossContextFormA)({ preventDefault() {} });
+assert.equal(crossContextCallsA, 1);
+assert.equal(crossContextActivationA.cleanup(), true);
+
+let crossContextControllerB;
+const crossContextActivationB = createRegistrationControllerActivation({
+  registrationService: {
+    submit() {
+      crossContextCallsB += 1;
+      return crossContextRequestB.promise;
+    },
+  },
+  createController(submitRegistration) {
+    crossContextControllerB = createRegistrationSubmitController(submitRegistration);
+    return crossContextControllerB;
+  },
+});
+assert.equal(crossContextActivationB.activate(), false, 'Replacement activation must fail while older work is pending');
+assert.deepEqual(await crossContextControllerB.submit(validInput, { form: createFakeForm() }), {
+  status: REGISTRATION_STATUS.UNAVAILABLE,
+  message: REGISTRATION_MESSAGES.UNAVAILABLE,
+});
+assert.equal(crossContextCallsB, 0, 'A rejected replacement controller must not call its service');
+assert.equal(crossContextActivationB.cleanup(), false);
+
+crossContextRequestA.resolve({ status: REGISTRATION_STATUS.SUBMITTED, message: REGISTRATION_MESSAGES.SUBMITTED });
+await crossContextSubmissionA;
+assert.equal(crossContextFormA.status.textContent, '', 'Retired work must not publish after cleanup');
+assert.equal(crossContextFormA.fields.get('password').value, validInput.password);
+assert.equal(crossContextActivationB.activate(), true, 'Replacement activation must succeed after settlement');
+const crossContextFormB = createFakeForm();
+const crossContextSubmissionB = createAuthFormSubmitHandler(crossContextFormB)({ preventDefault() {} });
+assert.equal(crossContextCallsA + crossContextCallsB, 2, 'Only a post-settlement submission may create call two');
+crossContextRequestB.resolve({ status: REGISTRATION_STATUS.SUBMITTED, message: REGISTRATION_MESSAGES.SUBMITTED });
+await crossContextSubmissionB;
+assert.equal(crossContextFormB.status.textContent, REGISTRATION_MESSAGES.SUBMITTED);
+assert.equal(crossContextActivationB.cleanup(), true);
+assert.equal(crossContextActivationB.cleanup(), false);
 
 const valid = validateRegistrationInput(validInput);
 assert.equal(valid.valid, true);
@@ -301,11 +531,21 @@ assert.equal(
   1,
   'The prepared registration controller must be declared but never invoked by the live entrypoint'
 );
-assert.doesNotMatch(browserSource, /createRegistrationService/, 'The live entrypoint must not construct a registration service');
+assert.equal(
+  browserSource.match(/createRegistrationComposition\s*\(/g)?.length,
+  1,
+  'The registration composition must be declared but never invoked by the live entrypoint'
+);
+assert.match(browserSource, /import \{ createRegistrationService \} from '\.\/registration\.js';/);
+assert.doesNotMatch(browserSource, /if \(typeof document !== ['"]undefined['"]\)/, 'Module import must not initialize Supabase');
 
 const authUiSource = await readFile(new URL('../js/auth-ui.js', import.meta.url), 'utf8');
 assert.equal(authUiSource.match(/addEventListener\(['"]submit['"]/g)?.length, 1, 'The form must retain one submit listener');
 assert.match(authUiSource, /activeRegistrationController/, 'Registration controller ownership must remain intact');
+assert.match(authUiSource, /let pendingRegistrationOwnerToken = null;/, 'Registration pending ownership must use an opaque token slot');
+assert.match(authUiSource, /const ownerToken = Symbol\(['"]registration-operation-owner['"]\);/);
+assert.match(authUiSource, /const registrationControllerOwnerTokens = new WeakMap\(\);/);
+assert.doesNotMatch(authUiSource, /pendingRegistrationController/, 'The module must not retain a registration controller as pending owner');
 assert.match(
   authUiSource,
   /Your details look ready\. No account was created and no email was sent\./,
