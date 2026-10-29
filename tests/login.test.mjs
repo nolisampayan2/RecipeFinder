@@ -5,6 +5,13 @@ import {
   LOGIN_STATUS,
   createLoginService,
 } from '../js/login.js';
+import {
+  activateLoginSubmitController,
+  createAuthFormSubmitHandler,
+  createLoginSubmitController,
+  deactivateLoginSubmitController,
+} from '../js/auth-ui.js';
+import { createLoginControllerActivation } from '../js/login-browser.js';
 
 const validInput = Object.freeze({ email: '  cook@example.test  ', password: 'StrongPass1' });
 const confirmedUser = Object.freeze({
@@ -188,5 +195,324 @@ const source = await readFile(new URL('../js/login.js', import.meta.url), 'utf8'
 assert.doesNotMatch(source, /console\.|localStorage|sessionStorage|\bfetch\s*\(|XMLHttpRequest|WebSocket/);
 assert.doesNotMatch(source, /createClient|initializeSupabaseClient|location\.|window\.|document\./);
 assert.doesNotMatch(source, /access_token|refresh_token|raw_user_meta_data|user_metadata/);
+
+class FakeInput {
+  constructor(name, value) {
+    this.name = name;
+    this.value = value;
+    this.attributes = new Map();
+    this.focusCalls = 0;
+  }
+  setAttribute(name, value) { this.attributes.set(name, value); }
+  focus() { this.focusCalls += 1; }
+}
+
+globalThis.HTMLInputElement = FakeInput;
+
+function createFakeForm({ email = validInput.email, password = validInput.password } = {}) {
+  const fields = new Map([
+    ['email', new FakeInput('email', email)],
+    ['password', new FakeInput('password', password)],
+  ]);
+  const errors = new Map([
+    ['email', { textContent: '' }],
+    ['password', { textContent: '' }],
+  ]);
+  const status = {
+    textContent: '',
+    classList: { isError: false, toggle(_name, enabled) { this.isError = enabled; } },
+  };
+  const submitButton = { disabled: false };
+  const attributes = new Map();
+  return {
+    dataset: { authForm: 'login' },
+    elements: { namedItem: (name) => fields.get(name) ?? null },
+    setAttribute: (name, value) => attributes.set(name, value),
+    querySelector(selector) {
+      if (selector === '[type="submit"]') return submitButton;
+      if (selector === '[data-form-status]') return status;
+      if (selector === '[aria-invalid="true"]') {
+        return [...fields.values()].find((field) => field.attributes.get('aria-invalid') === 'true') ?? null;
+      }
+      const match = /^\[data-error-for="(.+)"\]$/.exec(selector);
+      return match ? errors.get(match[1]) ?? null : null;
+    },
+    fields,
+    errors,
+    status,
+    submitButton,
+    attributes,
+  };
+}
+
+let releaseControllerRequest;
+let controllerSubmitCalls = 0;
+const submitController = createLoginSubmitController(() => {
+  controllerSubmitCalls += 1;
+  return new Promise((resolve) => {
+    releaseControllerRequest = () => resolve({
+      status: LOGIN_STATUS.AUTHENTICATED,
+      message: LOGIN_MESSAGES.AUTHENTICATED,
+    });
+  });
+});
+const controllerForm = createFakeForm();
+const controlledRequest = submitController.submit(validInput, { form: controllerForm });
+assert.equal(controllerForm.submitButton.disabled, true);
+assert.equal(controllerForm.attributes.get('aria-busy'), 'true');
+assert.deepEqual(await submitController.submit(validInput, { form: controllerForm }), { status: LOGIN_STATUS.PENDING });
+assert.equal(controllerSubmitCalls, 1);
+releaseControllerRequest();
+assert.equal((await controlledRequest).status, LOGIN_STATUS.AUTHENTICATED);
+assert.equal(controllerForm.submitButton.disabled, false);
+assert.equal(controllerForm.attributes.get('aria-busy'), 'false');
+assert.equal(controllerForm.fields.get('password').value, '');
+
+const invalidForm = createFakeForm({ email: 'invalid', password: '' });
+const invalidHandler = createAuthFormSubmitHandler(invalidForm);
+await invalidHandler({ preventDefault() {} });
+assert.equal(invalidForm.fields.get('email').focusCalls, 1, 'The first invalid field must receive focus');
+assert.equal(invalidForm.status.textContent, 'Please review the highlighted fields.');
+assert.equal(invalidForm.status.classList.isError, true);
+
+const sanitizedForm = createFakeForm();
+const sanitizedController = createLoginSubmitController(async () => ({
+  status: 'unknown-provider-status',
+  message: 'raw provider secret',
+  session: { access_token: 'never-render' },
+}));
+const sanitizedResult = await sanitizedController.submit(validInput, { form: createFakeForm() });
+assert.deepEqual(sanitizedResult, {
+  status: LOGIN_STATUS.UNAVAILABLE,
+  message: LOGIN_MESSAGES.UNAVAILABLE,
+});
+assert.doesNotMatch(JSON.stringify(sanitizedResult), /provider|secret|token|session/);
+assert.equal(activateLoginSubmitController(sanitizedController), true);
+await createAuthFormSubmitHandler(sanitizedForm)({ preventDefault() {} });
+assert.equal(sanitizedForm.status.textContent, LOGIN_MESSAGES.UNAVAILABLE);
+assert.doesNotMatch(sanitizedForm.status.textContent, /provider|secret|token/);
+assert.equal(deactivateLoginSubmitController(sanitizedController), true);
+
+const missingResultForm = createFakeForm();
+const missingResultController = createLoginSubmitController(async () => null);
+assert.equal((await missingResultController.submit(validInput, { form: missingResultForm })).status, LOGIN_STATUS.UNAVAILABLE);
+assert.equal(missingResultForm.fields.get('password').value, '');
+assert.throws(() => createLoginSubmitController(), /submit function is required/i);
+
+let installedController;
+let removedController;
+let serviceCreations = 0;
+const activation = createLoginControllerActivation({
+  client: { kind: 'offline-fake-client' },
+  createService(client) {
+    serviceCreations += 1;
+    assert.deepEqual(client, { kind: 'offline-fake-client' });
+    return { submit: async () => ({ status: LOGIN_STATUS.AUTHENTICATED }) };
+  },
+  installController(controller) {
+    installedController = controller;
+    return true;
+  },
+  removeController(controller) {
+    removedController = controller;
+    return true;
+  },
+});
+assert.equal(serviceCreations, 0, 'Creating the activation context must remain inert');
+assert.equal(activation.activate(), true);
+assert.equal(activation.activate(), true);
+assert.equal(serviceCreations, 1, 'Repeated activation must reuse one controller context');
+assert.equal(typeof installedController.submit, 'function');
+assert.equal(activation.cleanup(), true);
+assert.equal(removedController, installedController);
+assert.equal(activation.cleanup(), false, 'Cleanup must be idempotent');
+assert.equal(createLoginControllerActivation({}).activate(), false, 'Missing dependencies must fail closed');
+
+const defaultClientFake = createFakeClient();
+let defaultController;
+const defaultActivation = createLoginControllerActivation({
+  client: defaultClientFake.client,
+  installController(controller) {
+    defaultController = controller;
+    return true;
+  },
+  removeController: () => true,
+});
+assert.equal(defaultActivation.activate(), true, 'An explicitly supplied client must use the login service');
+assert.equal((await defaultController.submit(validInput, { form: createFakeForm() })).status, LOGIN_STATUS.AUTHENTICATED);
+assert.equal(defaultClientFake.calls.signIn.length, 1);
+assert.equal(defaultActivation.cleanup(), true);
+
+const cleanupFailureActivation = createLoginControllerActivation({
+  loginService: { submit: async () => ({ status: LOGIN_STATUS.AUTHENTICATED }) },
+  installController: () => true,
+  removeController: () => { throw new Error('offline cleanup fixture'); },
+});
+assert.equal(cleanupFailureActivation.activate(), true);
+assert.equal(cleanupFailureActivation.cleanup(), false, 'Cleanup dependency failures must remain contained');
+
+function deferredLoginResult() {
+  let resolve;
+  let reject;
+  const promise = new Promise((accept, decline) => {
+    resolve = accept;
+    reject = decline;
+  });
+  return { promise, resolve, reject };
+}
+
+const lifecycleRequests = [];
+let lifecycleServiceCalls = 0;
+const lifecycleActivation = createLoginControllerActivation({
+  loginService: {
+    submit() {
+      lifecycleServiceCalls += 1;
+      const request = deferredLoginResult();
+      lifecycleRequests.push(request);
+      return request.promise;
+    },
+  },
+});
+assert.equal(lifecycleActivation.activate(), true);
+const lifecycleForm = createFakeForm();
+const lifecycleHandler = createAuthFormSubmitHandler(lifecycleForm);
+const firstLifecycleSubmission = lifecycleHandler({ preventDefault() {} });
+assert.equal(lifecycleServiceCalls, 1);
+assert.equal(lifecycleForm.submitButton.disabled, true);
+assert.equal(lifecycleForm.attributes.get('aria-busy'), 'true');
+assert.equal(lifecycleActivation.cleanup(), true);
+assert.equal(lifecycleForm.submitButton.disabled, false, 'Cleanup must restore the pending button state');
+assert.equal(lifecycleForm.attributes.get('aria-busy'), 'false');
+assert.equal(lifecycleForm.fields.get('password').value, validInput.password, 'Cleanup must not clear the password');
+assert.equal(lifecycleActivation.activate(), true, 'The same controller context must support reactivation');
+assert.equal(lifecycleForm.submitButton.disabled, true, 'Reactivation must restore the outstanding pending state');
+const blockedLifecycleSubmission = lifecycleHandler({ preventDefault() {} });
+await blockedLifecycleSubmission;
+assert.equal(lifecycleServiceCalls, 1, 'Reactivation must not bypass the outstanding request guard');
+lifecycleRequests[0].resolve({ status: LOGIN_STATUS.AUTHENTICATED });
+await firstLifecycleSubmission;
+assert.notEqual(lifecycleForm.status.textContent, LOGIN_MESSAGES.AUTHENTICATED, 'A stale handler must not publish success');
+assert.equal(lifecycleForm.submitButton.disabled, false);
+assert.equal(lifecycleForm.attributes.get('aria-busy'), 'false');
+assert.equal(lifecycleForm.fields.get('password').value, validInput.password, 'A stale completion must not clear the password');
+
+const nextLifecycleSubmission = lifecycleHandler({ preventDefault() {} });
+assert.equal(lifecycleServiceCalls, 2, 'A new submission may proceed after the old request settles');
+lifecycleRequests[1].resolve({ status: LOGIN_STATUS.AUTHENTICATED });
+await nextLifecycleSubmission;
+assert.equal(lifecycleForm.status.textContent, LOGIN_MESSAGES.AUTHENTICATED);
+assert.equal(lifecycleForm.fields.get('password').value, '');
+assert.equal(lifecycleActivation.cleanup(), true);
+assert.equal(lifecycleActivation.cleanup(), false);
+assert.equal(lifecycleActivation.activate(), true);
+assert.equal(lifecycleActivation.activate(), true);
+assert.equal(lifecycleActivation.cleanup(), true);
+
+for (const settle of ['failure', 'rejection']) {
+  const request = deferredLoginResult();
+  const form = createFakeForm();
+  const activation = createLoginControllerActivation({
+    loginService: {
+      submit: settle === 'failure'
+        ? () => request.promise
+        : () => request.promise,
+    },
+  });
+  assert.equal(activation.activate(), true);
+  const submission = createAuthFormSubmitHandler(form)({ preventDefault() {} });
+  assert.equal(activation.cleanup(), true);
+  if (settle === 'failure') {
+    request.resolve({ status: LOGIN_STATUS.UNAVAILABLE, message: LOGIN_MESSAGES.UNAVAILABLE });
+  } else {
+    request.reject(new Error('offline rejected service fixture'));
+  }
+  await submission;
+  assert.equal(form.status.textContent, '', `Late ${settle} must not publish status`);
+  assert.equal(form.fields.get('password').value, validInput.password, `Late ${settle} must not clear password`);
+  assert.equal(form.submitButton.disabled, false);
+  assert.equal(form.attributes.get('aria-busy'), 'false');
+}
+
+const synchronousFailureForm = createFakeForm();
+const synchronousFailureController = createLoginSubmitController(() => {
+  throw new Error('offline synchronous service fixture');
+});
+assert.deepEqual(await synchronousFailureController.submit(validInput, { form: synchronousFailureForm }), {
+  status: LOGIN_STATUS.UNAVAILABLE,
+  message: LOGIN_MESSAGES.UNAVAILABLE,
+});
+assert.equal(synchronousFailureForm.submitButton.disabled, false);
+assert.equal(synchronousFailureForm.attributes.get('aria-busy'), 'false');
+
+const crossContextRequestA = deferredLoginResult();
+const crossContextRequestB = deferredLoginResult();
+let crossContextCallsA = 0;
+let crossContextCallsB = 0;
+const crossContextActivationA = createLoginControllerActivation({
+  loginService: {
+    submit() {
+      crossContextCallsA += 1;
+      return crossContextRequestA.promise;
+    },
+  },
+});
+assert.equal(crossContextActivationA.activate(), true);
+const crossContextFormA = createFakeForm();
+const crossContextSubmissionA = createAuthFormSubmitHandler(crossContextFormA)({ preventDefault() {} });
+assert.equal(crossContextCallsA, 1);
+assert.equal(crossContextActivationA.cleanup(), true);
+
+let crossContextControllerB;
+const crossContextActivationB = createLoginControllerActivation({
+  loginService: {
+    submit() {
+      crossContextCallsB += 1;
+      return crossContextRequestB.promise;
+    },
+  },
+  createController(submitLogin) {
+    crossContextControllerB = createLoginSubmitController(submitLogin);
+    return crossContextControllerB;
+  },
+});
+assert.equal(crossContextActivationB.activate(), false, 'Replacement activation must fail while older work is pending');
+assert.deepEqual(await crossContextControllerB.submit(validInput, { form: createFakeForm() }), {
+  status: LOGIN_STATUS.UNAVAILABLE,
+  message: LOGIN_MESSAGES.UNAVAILABLE,
+});
+assert.equal(crossContextCallsB, 0, 'A rejected replacement controller must not call its service');
+assert.equal(crossContextActivationB.cleanup(), false);
+
+crossContextRequestA.resolve({ status: LOGIN_STATUS.AUTHENTICATED });
+await crossContextSubmissionA;
+assert.equal(crossContextFormA.status.textContent, '', 'Retired work must not publish after cleanup');
+assert.equal(crossContextFormA.fields.get('password').value, validInput.password);
+assert.equal(crossContextActivationB.activate(), true, 'Replacement activation must succeed after settlement');
+const crossContextFormB = createFakeForm();
+const crossContextSubmissionB = createAuthFormSubmitHandler(crossContextFormB)({ preventDefault() {} });
+assert.equal(crossContextCallsA + crossContextCallsB, 2, 'Only a post-settlement submission may create call two');
+crossContextRequestB.resolve({ status: LOGIN_STATUS.AUTHENTICATED });
+await crossContextSubmissionB;
+assert.equal(crossContextFormB.status.textContent, LOGIN_MESSAGES.AUTHENTICATED);
+assert.equal(crossContextActivationB.cleanup(), true);
+assert.equal(crossContextActivationB.cleanup(), false);
+
+const loginHtml = await readFile(new URL('../login.html', import.meta.url), 'utf8');
+assert.doesNotMatch(loginHtml, /login-browser\.js|supabase-client\.js|supabase-config\.js|supabase\.js/i);
+assert.match(loginHtml, /<script type="module" src="js\/auth-ui\.js"><\/script>/);
+assert.match(loginHtml, /Authentication is not connected yet\. This form never sends or stores your credentials\./);
+const browserSource = await readFile(new URL('../js/login-browser.js', import.meta.url), 'utf8');
+assert.doesNotMatch(browserSource, /addEventListener|createClient|initializeSupabaseClient|supabase-config|\bfetch\s*\(|localStorage|sessionStorage/);
+const authUiSource = await readFile(new URL('../js/auth-ui.js', import.meta.url), 'utf8');
+assert.match(authUiSource, /let pendingLoginOwnerToken = null;/, 'The shared pending owner must be an opaque token slot');
+assert.match(authUiSource, /const ownerToken = Symbol\(['"]login-operation-owner['"]\);/);
+assert.match(authUiSource, /const loginControllerOwnerTokens = new WeakMap\(\);/);
+assert.match(authUiSource, /pendingLoginOwnerToken = ownerToken;/);
+assert.doesNotMatch(authUiSource, /pendingLoginController/, 'The module must not retain a controller as pending owner');
+assert.doesNotMatch(
+  authUiSource,
+  /pendingLoginOwnerToken\s*=\s*(?:controller|client|service|submitLogin|promise)/,
+  'The pending owner must never retain a controller, client, service, function, or promise'
+);
 
 console.log('Offline login service tests passed with injected fake clients only.');

@@ -305,6 +305,7 @@ assert.doesNotMatch(browserSource, /createRegistrationService/, 'The live entryp
 
 const authUiSource = await readFile(new URL('../js/auth-ui.js', import.meta.url), 'utf8');
 assert.equal(authUiSource.match(/addEventListener\(['"]submit['"]/g)?.length, 1, 'The form must retain one submit listener');
+assert.match(authUiSource, /activeRegistrationController/, 'Registration controller ownership must remain intact');
 assert.match(
   authUiSource,
   /Your details look ready\. No account was created and no email was sent\./,

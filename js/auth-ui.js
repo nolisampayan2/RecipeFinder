@@ -4,8 +4,16 @@ import {
   isValidEmailAddress,
   validateRegistrationInput,
 } from './registration.js';
+import {
+  LOGIN_MESSAGES,
+  LOGIN_STATUS,
+} from './login.js';
 
 let activeRegistrationController = null;
+let activeLoginController = null;
+let activeLoginControllerGeneration = 0;
+let pendingLoginOwnerToken = null;
+const loginControllerOwnerTokens = new WeakMap();
 
 function setFieldError(form, name, message) {
   const input = form.elements.namedItem(name);
@@ -108,6 +116,139 @@ export function activateRegistrationSubmitController(controller) {
   return true;
 }
 
+export function setLoginPendingState(form, pending) {
+  const submitButton = form?.querySelector?.('[type="submit"]');
+  if (submitButton) submitButton.disabled = pending;
+  form?.setAttribute?.('aria-busy', String(pending));
+}
+
+export function clearLoginPassword(form) {
+  const input = form?.elements?.namedItem?.('password');
+  if (input && typeof input.value === 'string') input.value = '';
+}
+
+function normalizeLoginResult(result) {
+  if (result?.status === LOGIN_STATUS.AUTHENTICATED) {
+    return Object.freeze({ status: LOGIN_STATUS.AUTHENTICATED, message: LOGIN_MESSAGES.AUTHENTICATED });
+  }
+  if (result?.status === LOGIN_STATUS.PENDING_CONFIRMATION) {
+    return Object.freeze({
+      status: LOGIN_STATUS.PENDING_CONFIRMATION,
+      message: LOGIN_MESSAGES.PENDING_CONFIRMATION,
+    });
+  }
+  if (result?.status === LOGIN_STATUS.PENDING) {
+    return Object.freeze({ status: LOGIN_STATUS.PENDING });
+  }
+  if (result?.status === LOGIN_STATUS.INVALID) {
+    return Object.freeze({ status: LOGIN_STATUS.INVALID });
+  }
+  return Object.freeze({ status: LOGIN_STATUS.UNAVAILABLE, message: LOGIN_MESSAGES.UNAVAILABLE });
+}
+
+export function createLoginSubmitController(submitLogin) {
+  if (typeof submitLogin !== 'function') {
+    throw new TypeError('A login submit function is required.');
+  }
+
+  let requestPending = false;
+  let active = true;
+  let generation = 0;
+  let pendingForm = null;
+  const ownerToken = Symbol('login-operation-owner');
+
+  const controller = Object.freeze({
+    async submit(input, { form } = {}) {
+      if (!active) {
+        return Object.freeze({ status: LOGIN_STATUS.UNAVAILABLE, message: LOGIN_MESSAGES.UNAVAILABLE });
+      }
+      if (pendingLoginOwnerToken && pendingLoginOwnerToken !== ownerToken) {
+        return Object.freeze({ status: LOGIN_STATUS.PENDING });
+      }
+      if (requestPending) return Object.freeze({ status: LOGIN_STATUS.PENDING });
+
+      requestPending = true;
+      pendingLoginOwnerToken = ownerToken;
+      pendingForm = form ?? null;
+      const operationGeneration = generation;
+      setLoginPendingState(form, true);
+
+      let result;
+      try {
+        result = normalizeLoginResult(await submitLogin(input));
+      } catch {
+        result = Object.freeze({ status: LOGIN_STATUS.UNAVAILABLE, message: LOGIN_MESSAGES.UNAVAILABLE });
+      } finally {
+        requestPending = false;
+        if (pendingLoginOwnerToken === ownerToken) pendingLoginOwnerToken = null;
+        const settledForm = pendingForm;
+        pendingForm = null;
+        if (active) setLoginPendingState(settledForm, false);
+        if (active && operationGeneration === generation) clearLoginPassword(settledForm);
+      }
+
+      if (!active || operationGeneration !== generation) {
+        return Object.freeze({ status: LOGIN_STATUS.UNAVAILABLE, message: LOGIN_MESSAGES.UNAVAILABLE });
+      }
+      return result;
+    },
+
+    activate() {
+      if (active) return true;
+      active = true;
+      generation += 1;
+      if (requestPending) setLoginPendingState(pendingForm, true);
+      return true;
+    },
+
+    deactivate() {
+      if (!active) return false;
+      active = false;
+      generation += 1;
+      if (requestPending) setLoginPendingState(pendingForm, false);
+      return true;
+    },
+  });
+
+  loginControllerOwnerTokens.set(controller, ownerToken);
+  return controller;
+}
+
+export function activateLoginSubmitController(controller) {
+  const ownerToken = loginControllerOwnerTokens.get(controller);
+  if (
+    activeLoginController
+    || (pendingLoginOwnerToken && pendingLoginOwnerToken !== ownerToken)
+    || typeof controller?.submit !== 'function'
+  ) return false;
+  activeLoginController = controller;
+  activeLoginControllerGeneration += 1;
+  return true;
+}
+
+export function deactivateLoginSubmitController(controller) {
+  if (!activeLoginController || activeLoginController !== controller) return false;
+  activeLoginController = null;
+  activeLoginControllerGeneration += 1;
+  return true;
+}
+
+function loginStatusMessage(result) {
+  if (result?.status === LOGIN_STATUS.AUTHENTICATED) {
+    return { message: LOGIN_MESSAGES.AUTHENTICATED, isError: false };
+  }
+  if (result?.status === LOGIN_STATUS.PENDING_CONFIRMATION) {
+    return { message: LOGIN_MESSAGES.PENDING_CONFIRMATION, isError: true };
+  }
+  if (result?.status === LOGIN_STATUS.PENDING) {
+    return { message: 'Sign-in is already in progress.', isError: true };
+  }
+  if (result?.status === LOGIN_STATUS.INVALID) {
+    return { message: 'Please review the highlighted fields.', isError: true };
+  }
+  return { message: LOGIN_MESSAGES.UNAVAILABLE, isError: true };
+}
+
 function initializePasswordToggles() {
   document.querySelectorAll('[data-password-toggle]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -124,17 +265,16 @@ function initializePasswordToggles() {
   });
 }
 
-function initializeForm() {
-  const form = document.querySelector('[data-auth-form]');
-  if (!(form instanceof HTMLFormElement)) return;
-
-  form.addEventListener('input', (event) => {
+export function createAuthFormInputHandler(form) {
+  return (event) => {
     if (!(event.target instanceof HTMLInputElement)) return;
     setFieldError(form, event.target.name, '');
     updateStatus(form, '');
-  });
+  };
+}
 
-  form.addEventListener('submit', async (event) => {
+export function createAuthFormSubmitHandler(form) {
+  return async (event) => {
     event.preventDefault();
     const valid = form.dataset.authForm === 'register' ? validateRegistration(form) : validateLogin(form);
 
@@ -158,10 +298,34 @@ function initializeForm() {
       return;
     }
 
+    if (form.dataset.authForm === 'login' && activeLoginController) {
+      const controller = activeLoginController;
+      const controllerGeneration = activeLoginControllerGeneration;
+      const result = await controller.submit({
+        email: valueOf(form, 'email'),
+        password: valueOf(form, 'password'),
+      }, { form });
+      if (
+        activeLoginController !== controller
+        || activeLoginControllerGeneration !== controllerGeneration
+      ) return;
+      const status = loginStatusMessage(result);
+      updateStatus(form, status.message, status.isError);
+      return;
+    }
+
     updateStatus(form, form.dataset.authForm === 'register'
       ? 'Your details look ready. No account was created and no email was sent.'
       : 'Your details look ready. Sign-in will be connected in Batch 3B.');
-  });
+  };
+}
+
+function initializeForm() {
+  const form = document.querySelector('[data-auth-form]');
+  if (!(form instanceof HTMLFormElement)) return;
+
+  form.addEventListener('input', createAuthFormInputHandler(form));
+  form.addEventListener('submit', createAuthFormSubmitHandler(form));
 }
 
 function initializeForgotPasswordPreview() {
