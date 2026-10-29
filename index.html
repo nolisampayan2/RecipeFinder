@@ -43,24 +43,28 @@
     <div class="page">
       <header class="topbar">
         <button class="mobile-menu" id="menu-btn" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false">☰</button>
-        <form class="search" id="search-form" role="search">
-          <span aria-hidden="true">⌕</span>
-          <label class="sr-only" for="search-input">Search recipes</label>
-          <input id="search-input" type="search" autocomplete="off" placeholder="Search recipes, ingredients, or cuisines…">
-          <button type="submit">Search</button>
+        <form class="search-tools" id="search-form" role="search">
+          <div class="search">
+            <span aria-hidden="true">⌕</span>
+            <label class="sr-only" for="search-input">Search recipes</label>
+            <input id="search-input" type="search" autocomplete="off" placeholder="Search recipes, ingredients, or cuisines…" aria-describedby="search-source-help">
+            <button type="submit">Search</button>
+          </div>
+          <div class="search-source-panel">
+            <fieldset class="search-source" id="search-source-selector" aria-describedby="search-source-help">
+              <legend>Recipe source</legend>
+              <label><input id="search-source-offline" type="radio" name="recipe-source" value="offline" checked><span>Offline Recipes</span></label>
+              <label><input id="search-source-online" type="radio" name="recipe-source" value="online" aria-describedby="online-search-disclosure"><span>Online Recipes</span></label>
+            </fieldset>
+            <div class="search-source-help" id="search-source-help" aria-live="polite">
+              <p id="offline-search-description">Search built-in recipes and fictional offline recipe previews.</p>
+              <p id="online-search-disclosure" hidden>Searching TheMealDB sends your search term to an external recipe service.</p>
+            </div>
+          </div>
         </form>
         <button class="theme-toggle" id="theme-toggle" aria-label="Switch to dark mode" aria-pressed="false" title="Toggle theme"><span aria-hidden="true">☀</span><i aria-hidden="true"></i><span aria-hidden="true">☾</span></button>
         <a class="guest" href="login.html" aria-label="Sign in to RecipeFinder"><span aria-hidden="true">👩🏽‍🍳</span><strong>Guest</strong><i aria-hidden="true">→</i></a>
       </header>
-
-      <div class="live-search-preview" aria-labelledby="mealdb-search-label">
-        <button id="mealdb-search-button" type="button" aria-describedby="mealdb-search-disclosure mealdb-search-privacy">Search TheMealDB</button>
-        <div>
-          <strong id="mealdb-search-label">Search online recipes</strong>
-          <p id="mealdb-search-disclosure">Searching TheMealDB sends your search term to an external recipe service.</p>
-          <small id="mealdb-search-privacy">A request is made only when you choose this button.</small>
-        </div>
-      </div>
 
       <main id="main-content">
         <section class="hero" id="home" aria-labelledby="hero-title">

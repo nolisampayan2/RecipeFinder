@@ -28,6 +28,20 @@ let lastExternalOperation = null;
 let externalDetailGeneration = 0;
 let liveDashboard = null;
 let recipeMode = 'offline';
+let searchSource = 'offline';
+
+function setSearchSource(source) {
+  searchSource = source === 'online' ? 'online' : 'offline';
+  const offlineInput = $('#search-source-offline');
+  const onlineInput = $('#search-source-online');
+  const offlineDescription = $('#offline-search-description');
+  const onlineDisclosure = $('#online-search-disclosure');
+  offlineInput.checked = searchSource === 'offline';
+  onlineInput.checked = searchSource === 'online';
+  offlineDescription.hidden = searchSource !== 'offline';
+  onlineDisclosure.hidden = searchSource !== 'online';
+  return searchSource;
+}
 
 function invalidateExternalDetails({ closeModal = false, restoreFocus = false } = {}) {
   externalDetailGeneration += 1;
@@ -105,12 +119,13 @@ function synchronizeExternalRecipes() {
   renderDashboard();
 }
 
-function resetExternalDiscovery({ clearRetry = true } = {}) {
+function resetExternalDiscovery({ clearRetry = true, resetSource = true } = {}) {
   exitLiveMode();
   invalidateExternalDetails({ closeModal: true, restoreFocus: false });
   externalRecipeController.invalidateCollection();
   dashboardCatalog = recipeCatalog;
   if (clearRetry) lastExternalOperation = null;
+  if (resetSource) setSearchSource('offline');
 }
 
 function discoverExternalRecipes(operation, value, { remember = true } = {}) {
@@ -225,30 +240,44 @@ function updateThemeToggle(dark) {
 }
 
 function initializeSearch() {
-  const liveSearchButton = $('#mealdb-search-button');
-  liveSearchButton.addEventListener('click', () => {
-    const query = $('#search-input').value.trim();
-    if (!query) {
-      $('#search-input').focus();
-      showToast('Enter a recipe name');
+  setSearchSource('offline');
+
+  $('#search-source-selector').addEventListener('change', (event) => {
+    if (event.target.name !== 'recipe-source') return;
+    const nextSource = event.target.value === 'online' ? 'online' : 'offline';
+    if (nextSource === 'offline' && recipeMode === 'live') {
+      restoreDiscoveryCollection();
       return;
     }
-
-    resetExternalDiscovery();
-    clearFilters();
-    state.view = 'default';
-    recipeMode = 'live';
-    setActiveNavigation('recommended');
-    getLiveDashboard().search(query);
-    $('#recommended').scrollIntoView({ behavior: 'smooth' });
+    setSearchSource(nextSource);
   });
 
   $('#search-form').addEventListener('submit', (event) => {
     event.preventDefault();
+    const query = $('#search-input').value.trim();
+
+    if (searchSource === 'online') {
+      if (!query) {
+        $('#search-input').focus();
+        showToast('Enter a recipe name');
+        return;
+      }
+
+      resetExternalDiscovery({ resetSource: false });
+      setSearchSource('online');
+      clearFilters();
+      state.view = 'default';
+      recipeMode = 'live';
+      setActiveNavigation('recommended');
+      getLiveDashboard().search(query);
+      $('#recommended').scrollIntoView({ behavior: 'smooth' });
+      return;
+    }
+
     resetExternalDiscovery();
     state.filter = '';
     state.view = 'default';
-    state.query = $('#search-input').value.trim();
+    state.query = query;
     renderDashboard();
     if (state.query) discoverExternalRecipes('search', state.query);
     $('#recommended').scrollIntoView({ behavior: 'smooth' });
@@ -256,7 +285,7 @@ function initializeSearch() {
   });
 
   $('#search-input').addEventListener('input', (event) => {
-    if (!event.target.value) {
+    if (!event.target.value && searchSource === 'offline') {
       resetExternalDiscovery();
       state.query = '';
       renderDashboard();
@@ -334,6 +363,7 @@ function initializePageActions() {
     }
 
     if (event.target.closest('[data-discover-more]')) {
+      setSearchSource('offline');
       discoverMoreRecipes();
       return;
     }

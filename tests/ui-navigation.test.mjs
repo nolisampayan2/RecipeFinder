@@ -30,6 +30,9 @@ assert.match(index, /class="sidebar-promo"[\s\S]*?<button data-scroll="recommend
 assert.match(index, /<button class="primary" data-scroll="recommended">Explore recipes/);
 
 const app = await readFile(new URL('app.js', root), 'utf8');
+const resetExternalDiscovery = app.match(/function resetExternalDiscovery[\s\S]*?\n\}/)?.[0] || '';
+assert.match(resetExternalDiscovery, /resetSource = true/);
+assert.match(resetExternalDiscovery, /if \(resetSource\) setSearchSource\('offline'\)/, 'Shared resets must restore Offline search');
 assert.equal((app.match(/function setActiveNavigation\(/g) || []).length, 1, 'Navigation state must use one shared helper');
 const activeNavigation = app.match(/function setActiveNavigation\(section\)[\s\S]*?\n\}/)?.[0] || '';
 assert.match(activeNavigation, /links\.find\(\(link\) => link\.dataset\.section === section\)/);
