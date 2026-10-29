@@ -5,6 +5,7 @@ export const SUPABASE_UMD_INTEGRITY = 'sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDp
 export const SUPABASE_CLIENT_PROFILE = Object.freeze({
   FOUNDATION: 'foundation',
   PKCE_PREPARATION: 'pkce-preparation',
+  APPLICATION_SESSION: 'application-session',
 });
 
 export const PKCE_STORAGE_REQUIREMENT =
@@ -100,6 +101,11 @@ export function getSupabaseClientOptions(profile = SUPABASE_CLIENT_PROFILE.FOUND
     auth.flowType = 'pkce';
     auth.persistSession = true;
     auth.skipAutoInitialize = true;
+  } else if (profile === SUPABASE_CLIENT_PROFILE.APPLICATION_SESSION) {
+    auth.flowType = 'pkce';
+    auth.persistSession = true;
+    auth.autoRefreshToken = true;
+    auth.skipAutoInitialize = true;
   } else if (profile !== SUPABASE_CLIENT_PROFILE.FOUNDATION) {
     throw new SupabaseConfigurationError('Unknown Supabase client profile.');
   }
@@ -125,4 +131,23 @@ export function initializeSupabaseClient(
   }
 
   return sdk.createClient(validated.url, validated.publishableKey, getSupabaseClientOptions(profile));
+}
+
+/**
+ * Creates an inert, explicitly invoked client initialization context.
+ * Repeated initialize calls reuse one client within that page context.
+ */
+export function createSupabaseClientInitializer({
+  config,
+  sdk = globalThis.supabase,
+  profile = SUPABASE_CLIENT_PROFILE.FOUNDATION,
+} = {}) {
+  let client;
+
+  return Object.freeze({
+    initialize() {
+      if (!client) client = initializeSupabaseClient(config, sdk, profile);
+      return client;
+    },
+  });
 }

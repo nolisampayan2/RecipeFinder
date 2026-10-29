@@ -7,6 +7,7 @@ import {
   SUPABASE_UMD_INTEGRITY,
   PKCE_STORAGE_REQUIREMENT,
   SupabaseConfigurationError,
+  createSupabaseClientInitializer,
   getSupabaseClientOptions,
   initializeSupabaseClient,
   validateSupabaseConfig,
@@ -45,6 +46,15 @@ assert.deepEqual(getSupabaseClientOptions(SUPABASE_CLIENT_PROFILE.PKCE_PREPARATI
   },
 });
 assert.equal('storage' in getSupabaseClientOptions(SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION).auth, false);
+assert.deepEqual(getSupabaseClientOptions(SUPABASE_CLIENT_PROFILE.APPLICATION_SESSION), {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: false,
+    flowType: 'pkce',
+    skipAutoInitialize: true,
+  },
+});
 assert.throws(() => getSupabaseClientOptions('unknown'), SupabaseConfigurationError);
 
 assert.deepEqual(validateSupabaseConfig(validConfig), validConfig);
@@ -106,6 +116,17 @@ assert.equal(
 );
 assert.equal(createClientCalls, 2, 'The PKCE profile must still require explicit initialization');
 assert.deepEqual(receivedOptions[1], getSupabaseClientOptions(SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION));
+
+const applicationInitializer = createSupabaseClientInitializer({
+  config: validConfig,
+  sdk: fakeSdk,
+  profile: SUPABASE_CLIENT_PROFILE.APPLICATION_SESSION,
+});
+assert.equal(createClientCalls, 2, 'Creating an initializer must remain inert');
+assert.equal(applicationInitializer.initialize(), fakeClient);
+assert.equal(applicationInitializer.initialize(), fakeClient);
+assert.equal(createClientCalls, 3, 'One initializer context must create only one application client');
+assert.deepEqual(receivedOptions[2], getSupabaseClientOptions(SUPABASE_CLIENT_PROFILE.APPLICATION_SESSION));
 
 const adapterSource = await readFile(new URL('../js/supabase-client.js', import.meta.url), 'utf8');
 assert.doesNotMatch(adapterSource, /\bfetch\s*\(|XMLHttpRequest|WebSocket|import\s*\(\s*['"]https?:/i);
