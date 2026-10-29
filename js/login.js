@@ -36,24 +36,60 @@ function validateLoginInput(input = {}) {
   };
 }
 
+function isNonArrayObject(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function isMeaningfulString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
 function isMatchingAuthResult(data) {
-  const userId = data?.user?.id;
-  const sessionUserId = data?.session?.user?.id;
+  if (
+    !isNonArrayObject(data)
+    || !isNonArrayObject(data.user)
+    || !isNonArrayObject(data.session)
+    || !isNonArrayObject(data.session.user)
+    || !isMeaningfulString(data.session.access_token)
+    || !isMeaningfulString(data.session.refresh_token)
+  ) {
+    return false;
+  }
+
+  const userId = data.user.id;
+  const sessionUserId = data.session.user.id;
   return (
-    typeof userId === 'string'
-    && userId.length > 0
-    && typeof sessionUserId === 'string'
+    isMeaningfulString(userId)
+    && isMeaningfulString(sessionUserId)
     && sessionUserId === userId
   );
 }
 
 function isExplicitAuthSuccess(response) {
   return (
-    response !== null
-    && typeof response === 'object'
+    isNonArrayObject(response)
     && Object.prototype.hasOwnProperty.call(response, 'error')
     && response.error === null
   );
+}
+
+function isExplicitProviderFailureWithoutSession(response) {
+  return Boolean(
+    isNonArrayObject(response)
+    && Object.prototype.hasOwnProperty.call(response, 'data')
+    && response.data === null
+    && Object.prototype.hasOwnProperty.call(response, 'error')
+    && isNonArrayObject(response.error)
+    && isMeaningfulString(response.error.message)
+  );
+}
+
+async function containLocalSession(auth) {
+  try {
+    return isExplicitAuthSuccess(await auth.signOut({ scope: 'local' }));
+  } catch {
+    return false;
+  }
 }
 
 function requireAuthClient(client) {
@@ -86,30 +122,44 @@ export function createLoginService(client) {
 
       requestPending = true;
       try {
-        const result = await auth.signInWithPassword({
-          email: validation.email,
-          password: validation.password,
-        });
-        if (!isExplicitAuthSuccess(result) || !isMatchingAuthResult(result.data)) {
+        let result;
+        try {
+          result = await auth.signInWithPassword({
+            email: validation.email,
+            password: validation.password,
+          });
+        } catch {
+          await containLocalSession(auth);
           return UNAVAILABLE_RESULT;
         }
 
-        const confirmed = isEmailConfirmed(result.data.user) && isEmailConfirmed(result.data.session.user);
-        if (!confirmed) {
-          const signOutResult = await auth.signOut({ scope: 'local' });
-          if (!isExplicitAuthSuccess(signOutResult)) {
+        try {
+          if (!isExplicitAuthSuccess(result) || !isMatchingAuthResult(result.data)) {
+            if (!isExplicitProviderFailureWithoutSession(result)) {
+              await containLocalSession(auth);
+            }
             return UNAVAILABLE_RESULT;
           }
-          return Object.freeze({
-            status: LOGIN_STATUS.PENDING_CONFIRMATION,
-            message: LOGIN_MESSAGES.PENDING_CONFIRMATION,
-          });
-        }
 
-        return Object.freeze({
-          status: LOGIN_STATUS.AUTHENTICATED,
-          message: LOGIN_MESSAGES.AUTHENTICATED,
-        });
+          const confirmed = isEmailConfirmed(result.data.user) && isEmailConfirmed(result.data.session.user);
+          if (!confirmed) {
+            if (!await containLocalSession(auth)) {
+              return UNAVAILABLE_RESULT;
+            }
+            return Object.freeze({
+              status: LOGIN_STATUS.PENDING_CONFIRMATION,
+              message: LOGIN_MESSAGES.PENDING_CONFIRMATION,
+            });
+          }
+
+          return Object.freeze({
+            status: LOGIN_STATUS.AUTHENTICATED,
+            message: LOGIN_MESSAGES.AUTHENTICATED,
+          });
+        } catch {
+          await containLocalSession(auth);
+          return UNAVAILABLE_RESULT;
+        }
       } catch {
         return UNAVAILABLE_RESULT;
       } finally {

@@ -78,14 +78,44 @@ for (const [input, expectedField] of [
   assert.equal(fake.calls.signOut.length, 0);
 }
 
+const rejectedCredentialsFake = createFakeClient({
+  signIn: async () => ({ data: null, error: new Error('Invalid login credentials') }),
+});
+const rejectedCredentialsResult = await createLoginService(rejectedCredentialsFake.client).submit(validInput);
+assert.deepEqual(rejectedCredentialsResult, { status: LOGIN_STATUS.UNAVAILABLE, message: LOGIN_MESSAGES.UNAVAILABLE });
+assert.deepEqual(rejectedCredentialsFake.calls.signOut, [], 'An explicit provider failure without session evidence needs no cleanup');
+
+for (const response of [
+  { error: new Error('missing data') },
+  { data: undefined, error: new Error('undefined data') },
+  { data: {}, error: new Error('empty data') },
+  { data: { session: undefined }, error: new Error('undefined session') },
+  { data: null, error: false },
+  { data: null, error: 0 },
+  { data: null, error: '' },
+  { data: null, error: {} },
+  { data: null, error: { message: '   ' } },
+]) {
+  const fake = createFakeClient({ signIn: async () => response });
+  const result = await createLoginService(fake.client).submit(validInput);
+  assert.deepEqual(result, { status: LOGIN_STATUS.UNAVAILABLE, message: LOGIN_MESSAGES.UNAVAILABLE });
+  assert.deepEqual(
+    fake.calls.signOut,
+    [{ scope: 'local' }],
+    'Malformed provider failure envelopes require exactly one local containment attempt'
+  );
+  assert.doesNotMatch(JSON.stringify(result), /missing data|undefined data|empty data|undefined session|token|password/i);
+}
+
 for (const signIn of [
-  async () => ({ data: null, error: new Error('Invalid login credentials') }),
   async () => { throw new Error('offline network detail'); },
+  () => Promise.reject(new Error('offline rejected provider detail')),
 ]) {
   const fake = createFakeClient({ signIn });
   const result = await createLoginService(fake.client).submit(validInput);
   assert.deepEqual(result, { status: LOGIN_STATUS.UNAVAILABLE, message: LOGIN_MESSAGES.UNAVAILABLE });
-  assert.doesNotMatch(JSON.stringify(result), /Invalid login|network detail|StrongPass1|fixture-access-token/);
+  assert.deepEqual(fake.calls.signOut, [{ scope: 'local' }], 'An uncertain provider exception requires one containment attempt');
+  assert.doesNotMatch(JSON.stringify(result), /network detail|rejected provider|StrongPass1|fixture-access-token/);
 }
 
 for (const response of [
@@ -97,6 +127,7 @@ for (const response of [
     status: LOGIN_STATUS.UNAVAILABLE,
     message: LOGIN_MESSAGES.UNAVAILABLE,
   }, 'Sign-in success requires an explicit own error property equal to null');
+  assert.deepEqual(fake.calls.signOut, [{ scope: 'local' }]);
 }
 
 const pendingRequest = deferred();
@@ -123,6 +154,8 @@ for (const user of [
 }
 
 for (const signOut of [
+  async () => null,
+  async () => [],
   async () => ({}),
   async () => ({ data: null }),
   async () => ({ error: undefined }),
@@ -150,12 +183,40 @@ assert.throws(
   /compatible Supabase Auth login client/
 );
 
+const decoratedData = [];
+decoratedData.user = confirmedUser;
+decoratedData.session = authData().session;
+const decoratedResponse = [];
+decoratedResponse.data = authData();
+decoratedResponse.error = null;
+const decoratedSession = [];
+decoratedSession.user = { ...confirmedUser };
+decoratedSession.access_token = 'fixture-access-token';
+decoratedSession.refresh_token = 'fixture-refresh-token';
+const decoratedUser = [];
+decoratedUser.id = confirmedUser.id;
+decoratedUser.email_confirmed_at = confirmedUser.email_confirmed_at;
+
 for (const response of [
   null,
+  undefined,
+  false,
+  [],
+  decoratedResponse,
   {},
   { data: null, error: null },
+  { data: false, error: null },
+  { data: decoratedData, error: null },
   { data: { user: confirmedUser }, error: null },
+  { data: { user: false, session: authData().session }, error: null },
+  { data: { user: confirmedUser, session: false }, error: null },
   { data: { user: confirmedUser, session: {} }, error: null },
+  { data: { user: confirmedUser, session: decoratedSession }, error: null },
+  { data: { user: decoratedUser, session: authData().session }, error: null },
+  { data: { user: confirmedUser, session: { ...authData().session, access_token: '   ' } }, error: null },
+  { data: { user: confirmedUser, session: { ...authData().session, refresh_token: '\t' } }, error: null },
+  { data: { user: { ...confirmedUser, id: ' ' }, session: authData().session }, error: null },
+  { data: { user: confirmedUser, session: { ...authData().session, user: { ...confirmedUser, id: '\n' } } }, error: null },
   {
     data: {
       user: confirmedUser,
@@ -169,7 +230,107 @@ for (const response of [
     status: LOGIN_STATUS.UNAVAILABLE,
     message: LOGIN_MESSAGES.UNAVAILABLE,
   });
+  assert.deepEqual(fake.calls.signOut, [{ scope: 'local' }], 'Malformed or mismatched success responses require containment');
 }
+
+function withThrowingGetter(target, property, message) {
+  Object.defineProperty(target, property, {
+    configurable: true,
+    enumerable: true,
+    get() { throw new Error(message); },
+  });
+  return target;
+}
+
+const throwingDataResponse = withThrowingGetter({ error: null }, 'data', 'raw data getter detail');
+const throwingErrorResponse = withThrowingGetter({ data: authData() }, 'error', 'raw error getter detail');
+const throwingSessionData = withThrowingGetter({ user: confirmedUser }, 'session', 'raw session getter detail');
+const throwingUserData = withThrowingGetter({ session: authData().session }, 'user', 'raw user getter detail');
+const throwingTokenSession = withThrowingGetter(
+  { refresh_token: 'fixture-refresh-token', user: { ...confirmedUser } },
+  'access_token',
+  'raw token getter detail'
+);
+const throwingIdentityUser = withThrowingGetter(
+  { email_confirmed_at: confirmedUser.email_confirmed_at },
+  'id',
+  'raw identity getter detail'
+);
+const throwingConfirmationUser = withThrowingGetter(
+  { id: confirmedUser.id },
+  'email_confirmed_at',
+  'raw confirmation getter detail'
+);
+const throwingValidationProxy = new Proxy(authData(), {
+  get(target, property, receiver) {
+    if (property === 'user') throw new Error('raw validation proxy detail');
+    return Reflect.get(target, property, receiver);
+  },
+});
+const throwingEvidenceProxy = new Proxy({}, {
+  get(_target, property) {
+    if (property === 'session') throw new Error('raw evidence proxy detail');
+    return undefined;
+  },
+});
+
+for (const response of [
+  throwingDataResponse,
+  throwingErrorResponse,
+  { data: throwingSessionData, error: null },
+  { data: throwingUserData, error: null },
+  { data: { user: confirmedUser, session: throwingTokenSession }, error: null },
+  { data: { user: throwingIdentityUser, session: authData().session }, error: null },
+  {
+    data: {
+      user: throwingConfirmationUser,
+      session: { ...authData().session, user: throwingConfirmationUser },
+    },
+    error: null,
+  },
+  { data: throwingValidationProxy, error: null },
+  { data: throwingEvidenceProxy, error: new Error('explicit provider failure with uncertain session evidence') },
+]) {
+  const fake = createFakeClient({ signIn: async () => response });
+  const result = await createLoginService(fake.client).submit(validInput);
+  assert.deepEqual(result, { status: LOGIN_STATUS.UNAVAILABLE, message: LOGIN_MESSAGES.UNAVAILABLE });
+  assert.deepEqual(
+    fake.calls.signOut,
+    [{ scope: 'local' }],
+    'A throwing accessor or proxy must trigger exactly one local containment attempt'
+  );
+  assert.doesNotMatch(JSON.stringify(result), /getter|proxy|provider failure|token|session|password/i);
+}
+
+for (const response of [
+  { data: authData(), error: new Error('provider error with session') },
+  { data: { session: 'possible-session' }, error: new Error('provider error with malformed session') },
+]) {
+  const fake = createFakeClient({ signIn: async () => response });
+  const result = await createLoginService(fake.client).submit(validInput);
+  assert.deepEqual(result, { status: LOGIN_STATUS.UNAVAILABLE, message: LOGIN_MESSAGES.UNAVAILABLE });
+  assert.deepEqual(fake.calls.signOut, [{ scope: 'local' }]);
+  assert.doesNotMatch(JSON.stringify(result), /provider error|possible-session|fixture-access-token/);
+}
+
+const neverSettlingCleanup = deferred();
+let neverSettlingSignInCalls = 0;
+const neverSettlingFake = createFakeClient({
+  signIn: async () => {
+    neverSettlingSignInCalls += 1;
+    return { data: authData({ ...confirmedUser, email_confirmed_at: null }), error: null };
+  },
+  signOut: () => neverSettlingCleanup.promise,
+});
+const neverSettlingService = createLoginService(neverSettlingFake.client);
+const cleanupRequest = neverSettlingService.submit(validInput);
+await Promise.resolve();
+await Promise.resolve();
+assert.deepEqual(await neverSettlingService.submit(validInput), { status: LOGIN_STATUS.PENDING });
+assert.equal(neverSettlingSignInCalls, 1);
+assert.deepEqual(neverSettlingFake.calls.signOut, [{ scope: 'local' }]);
+neverSettlingCleanup.resolve({ error: null });
+assert.equal((await cleanupRequest).status, LOGIN_STATUS.PENDING_CONFIRMATION);
 
 let recoveryAttempt = 0;
 const recoveryFake = createFakeClient({
@@ -194,7 +355,7 @@ assert.doesNotMatch(serializedResults, /StrongPass1|fixture-access-token|fixture
 const source = await readFile(new URL('../js/login.js', import.meta.url), 'utf8');
 assert.doesNotMatch(source, /console\.|localStorage|sessionStorage|\bfetch\s*\(|XMLHttpRequest|WebSocket/);
 assert.doesNotMatch(source, /createClient|initializeSupabaseClient|location\.|window\.|document\./);
-assert.doesNotMatch(source, /access_token|refresh_token|raw_user_meta_data|user_metadata/);
+assert.doesNotMatch(source, /raw_user_meta_data|user_metadata/);
 
 class FakeInput {
   constructor(name, value) {
