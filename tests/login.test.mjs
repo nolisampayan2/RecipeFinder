@@ -11,7 +11,15 @@ import {
   createLoginSubmitController,
   deactivateLoginSubmitController,
 } from '../js/auth-ui.js';
-import { createLoginControllerActivation } from '../js/login-browser.js';
+import {
+  createLoginControllerActivation,
+  createLoginPageComposition,
+} from '../js/login-browser.js';
+import {
+  SUPABASE_CLIENT_PROFILE,
+  SupabaseConfigurationError,
+  getSupabaseClientOptions,
+} from '../js/supabase-client.js';
 
 const validInput = Object.freeze({ email: '  cook@example.test  ', password: 'StrongPass1' });
 const confirmedUser = Object.freeze({
@@ -55,6 +63,593 @@ function createFakeClient({ signIn, signOut } = {}) {
     calls,
   };
 }
+
+const offlinePageConfig = Object.freeze({
+  url: 'https://recipefinder-test.supabase.co',
+  publishableKey: 'sb_publishable_test_abcdefghijklmnopqrstuvwxyz',
+});
+let pageClientCreations = 0;
+let pageSignInCalls = 0;
+let pageSignUpCalls = 0;
+let pageSubscriptionCalls = 0;
+let pageSessionCalls = 0;
+let pageSignOutCalls = 0;
+const sharedPageClient = Object.freeze({
+  auth: Object.freeze({
+    signInWithPassword() { pageSignInCalls += 1; },
+    signUp() { pageSignUpCalls += 1; },
+    onAuthStateChange() { pageSubscriptionCalls += 1; },
+    getSession() { pageSessionCalls += 1; },
+    signOut() { pageSignOutCalls += 1; },
+  }),
+});
+const loginPageComposition = createLoginPageComposition({
+  clientDependencies: {
+    config: offlinePageConfig,
+    sdk: {
+      createClient(url, key, options) {
+        pageClientCreations += 1;
+        assert.equal(url, offlinePageConfig.url);
+        assert.equal(key, offlinePageConfig.publishableKey);
+        assert.deepEqual(
+          options,
+          getSupabaseClientOptions(SUPABASE_CLIENT_PROFILE.APPLICATION_SESSION)
+        );
+        return sharedPageClient;
+      },
+    },
+  },
+});
+assert.equal(loginPageComposition.profile, SUPABASE_CLIENT_PROFILE.APPLICATION_SESSION);
+assert.equal(pageClientCreations, 0, 'Login page composition construction must remain lazy');
+assert.equal(loginPageComposition.prepareClient(), sharedPageClient);
+assert.equal(loginPageComposition.prepareClient(), sharedPageClient);
+assert.equal(pageClientCreations, 1, 'Repeated preparation must share one page client');
+
+let preparedControllerClient;
+let preparedControllerActivations = 0;
+const preparedController = loginPageComposition.prepareController({
+  createService(client) {
+    preparedControllerClient = client;
+    return { submit: async () => ({ status: LOGIN_STATUS.UNAVAILABLE }) };
+  },
+  installController() {
+    preparedControllerActivations += 1;
+    return true;
+  },
+  removeController: () => true,
+});
+assert.equal(preparedControllerClient, undefined, 'Controller preparation must not create the login service');
+assert.equal(preparedControllerActivations, 0, 'Controller preparation must not install a live controller');
+assert.equal(preparedController.activate(), true);
+assert.equal(preparedControllerClient, sharedPageClient);
+assert.equal(preparedControllerActivations, 1);
+assert.equal(preparedController.cleanup(), true);
+assert.equal(pageClientCreations, 1, 'Prepared consumers must reuse the shared client identity');
+assert.deepEqual(
+  { pageSignInCalls, pageSignUpCalls, pageSubscriptionCalls, pageSessionCalls, pageSignOutCalls },
+  { pageSignInCalls: 0, pageSignUpCalls: 0, pageSubscriptionCalls: 0, pageSessionCalls: 0, pageSignOutCalls: 0 },
+  'Preparation and controller installation must not perform Auth operations'
+);
+
+let transientClientAttempts = 0;
+const transientClient = Object.freeze({ auth: Object.freeze({}) });
+const retryingComposition = createLoginPageComposition({
+  clientDependencies: {
+    config: offlinePageConfig,
+    sdk: {
+      createClient() {
+        transientClientAttempts += 1;
+        if (transientClientAttempts === 1) throw new Error('private SDK initialization detail');
+        return transientClient;
+      },
+    },
+  },
+});
+assert.throws(
+  () => retryingComposition.prepareClient(),
+  (error) => /initialization failed/i.test(error.message) && !/private|SDK/i.test(error.message)
+);
+assert.equal(retryingComposition.prepareClient(), transientClient);
+assert.equal(retryingComposition.prepareClient(), transientClient);
+assert.equal(transientClientAttempts, 2, 'A transient failure must permit one explicit retry');
+
+let malformedClientAttempts = 0;
+const malformedComposition = createLoginPageComposition({
+  clientDependencies: {
+    config: offlinePageConfig,
+    sdk: { createClient() { malformedClientAttempts += 1; return {}; } },
+  },
+});
+assert.throws(() => malformedComposition.prepareClient(), /initialization failed/i);
+assert.throws(() => malformedComposition.prepareClient(), /initialization failed/i);
+assert.equal(malformedClientAttempts, 2, 'Malformed clients must not become cached');
+
+function assertSanitizedPreparationFailure(composition, privatePattern) {
+  assert.throws(
+    () => composition.prepareClient(),
+    (error) => error.message === 'Supabase client initialization failed.'
+      && !privatePattern.test(error.message)
+  );
+}
+
+function assertSanitizedBoundaryFailure(operation, privatePattern) {
+  assert.throws(
+    operation,
+    (error) => error.message === 'Supabase client initialization failed.'
+      && !privatePattern.test(error.message)
+  );
+}
+
+for (const property of [
+  'clientOwner',
+  'clientDependencies',
+  'createClientOwner',
+  'createControllerActivation',
+]) {
+  const options = {};
+  const privatePattern = new RegExp(`PRIVATE_OUTER_${property.toUpperCase()}`);
+  Object.defineProperty(options, property, {
+    enumerable: true,
+    get() { throw new Error(`PRIVATE_OUTER_${property.toUpperCase()}`); },
+  });
+  assertSanitizedBoundaryFailure(
+    () => createLoginPageComposition(options),
+    privatePattern
+  );
+}
+
+const outerGetProxy = new Proxy({}, {
+  get() { throw new Error('PRIVATE_OUTER_GET_TRAP'); },
+});
+assertSanitizedBoundaryFailure(
+  () => createLoginPageComposition(outerGetProxy),
+  /PRIVATE_OUTER_GET_TRAP/
+);
+
+const omittedOptionsComposition = createLoginPageComposition();
+assert.throws(
+  () => omittedOptionsComposition.prepareClient(),
+  /Supabase public configuration is missing\./
+);
+
+let transientOuterFailure = true;
+let transientOuterOwnerCalls = 0;
+const transientOuterOptionsTarget = {
+  clientDependencies: {},
+  createClientOwner() {
+    transientOuterOwnerCalls += 1;
+    return { initialize: () => sharedPageClient };
+  },
+};
+const transientOuterOptions = new Proxy(transientOuterOptionsTarget, {
+  get(target, property, receiver) {
+    if (property === 'clientOwner' && transientOuterFailure) {
+      transientOuterFailure = false;
+      throw new Error('PRIVATE_TRANSIENT_OUTER_GETTER');
+    }
+    return Reflect.get(target, property, receiver);
+  },
+});
+assertSanitizedBoundaryFailure(
+  () => createLoginPageComposition(transientOuterOptions),
+  /PRIVATE_TRANSIENT_OUTER_GETTER/
+);
+const recoveredOuterComposition = createLoginPageComposition(transientOuterOptions);
+assert.equal(recoveredOuterComposition.prepareClient(), sharedPageClient);
+assert.equal(recoveredOuterComposition.prepareClient(), sharedPageClient);
+assert.equal(transientOuterOwnerCalls, 1);
+
+for (const [name, options] of [
+  ['ownKeys', new Proxy({}, {
+    ownKeys() { throw new Error('PRIVATE_CONTROLLER_OWN_KEYS'); },
+  })],
+  ['descriptor', new Proxy({ createService: () => ({ submit: async () => ({}) }) }, {
+    getOwnPropertyDescriptor() { throw new Error('PRIVATE_CONTROLLER_DESCRIPTOR'); },
+  })],
+  ['get', new Proxy({ createService: () => ({ submit: async () => ({}) }) }, {
+    getOwnPropertyDescriptor(target, property) {
+      return Reflect.getOwnPropertyDescriptor(target, property);
+    },
+    get() { throw new Error('PRIVATE_CONTROLLER_GET'); },
+  })],
+]) {
+  assertSanitizedBoundaryFailure(
+    () => loginPageComposition.prepareController(options),
+    new RegExp(`PRIVATE_CONTROLLER_${name.toUpperCase()}`)
+  );
+  assert.equal(loginPageComposition.prepareClient(), sharedPageClient);
+  assert.equal(pageClientCreations, 1, 'Failed controller preparation must preserve the shared client');
+}
+
+const throwingControllerOptions = {};
+Object.defineProperty(throwingControllerOptions, 'createService', {
+  enumerable: true,
+  get() { throw new Error('PRIVATE_CONTROLLER_ENUMERABLE_GETTER'); },
+});
+assertSanitizedBoundaryFailure(
+  () => loginPageComposition.prepareController(throwingControllerOptions),
+  /PRIVATE_CONTROLLER_ENUMERABLE_GETTER/
+);
+
+let retriedControllerClient;
+const retriedPreparedController = loginPageComposition.prepareController({
+  client: { auth: { signInWithPassword() { throw new Error('must not be used'); } } },
+  createService(client) {
+    retriedControllerClient = client;
+    return { submit: async () => ({ status: LOGIN_STATUS.UNAVAILABLE }) };
+  },
+  installController: () => true,
+  removeController: () => true,
+});
+assert.equal(retriedPreparedController.activate(), true);
+assert.equal(retriedControllerClient, sharedPageClient);
+assert.equal(retriedPreparedController.cleanup(), true);
+assert.equal(pageClientCreations, 1);
+
+for (const property of ['config', 'sdk', 'unrelated']) {
+  let getterCalls = 0;
+  let ownerCalls = 0;
+  const privatePattern = new RegExp(`PRIVATE_${property.toUpperCase()}_GETTER`);
+  const dependencies = {};
+  Object.defineProperty(dependencies, property, {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      throw new Error(`PRIVATE_${property.toUpperCase()}_GETTER`);
+    },
+  });
+  const composition = createLoginPageComposition({
+    clientDependencies: dependencies,
+    createClientOwner() {
+      ownerCalls += 1;
+      return { initialize: () => sharedPageClient };
+    },
+  });
+  assertSanitizedPreparationFailure(composition, privatePattern);
+  assert.equal(getterCalls, 1);
+  assert.equal(ownerCalls, 0, 'Dependency extraction failure must not construct or cache an owner');
+}
+
+for (const [name, dependencies] of [
+  ['ownKeys', new Proxy({}, {
+    ownKeys() { throw new Error('PRIVATE_OWN_KEYS_TRAP'); },
+  })],
+  ['descriptor', new Proxy({ config: offlinePageConfig }, {
+    getOwnPropertyDescriptor() { throw new Error('PRIVATE_DESCRIPTOR_TRAP'); },
+  })],
+  ['get', new Proxy({ config: offlinePageConfig }, {
+    getOwnPropertyDescriptor(target, property) {
+      return Reflect.getOwnPropertyDescriptor(target, property);
+    },
+    get() { throw new Error('PRIVATE_GET_TRAP'); },
+  })],
+]) {
+  let ownerCalls = 0;
+  const composition = createLoginPageComposition({
+    clientDependencies: dependencies,
+    createClientOwner() {
+      ownerCalls += 1;
+      return { initialize: () => sharedPageClient };
+    },
+  });
+  assertSanitizedPreparationFailure(composition, new RegExp(`PRIVATE_${name.toUpperCase()}`));
+  assert.equal(ownerCalls, 0, `${name} trap failure must not cache an owner`);
+}
+
+let transientGetterCalls = 0;
+let transientGetterOwnerCalls = 0;
+const transientGetterDependencies = {};
+Object.defineProperty(transientGetterDependencies, 'config', {
+  enumerable: true,
+  get() {
+    transientGetterCalls += 1;
+    if (transientGetterCalls === 1) throw new Error('PRIVATE_TRANSIENT_GETTER');
+    return offlinePageConfig;
+  },
+});
+Object.defineProperty(transientGetterDependencies, 'sdk', {
+  enumerable: true,
+  value: { createClient: () => sharedPageClient },
+});
+const transientGetterComposition = createLoginPageComposition({
+  clientDependencies: transientGetterDependencies,
+  createClientOwner(options) {
+    transientGetterOwnerCalls += 1;
+    assert.equal(options.profile, SUPABASE_CLIENT_PROFILE.APPLICATION_SESSION);
+    return {
+      initialize(profile) {
+        assert.equal(profile, SUPABASE_CLIENT_PROFILE.APPLICATION_SESSION);
+        return sharedPageClient;
+      },
+    };
+  },
+});
+assertSanitizedPreparationFailure(transientGetterComposition, /PRIVATE_TRANSIENT_GETTER/);
+assert.equal(transientGetterOwnerCalls, 0);
+assert.equal(transientGetterComposition.prepareClient(), sharedPageClient);
+assert.equal(transientGetterComposition.prepareClient(), sharedPageClient);
+assert.equal(transientGetterOwnerCalls, 1, 'Successful retry must cache one owner');
+
+const unhandledClientRejections = [];
+const captureClientRejection = (reason) => unhandledClientRejections.push(reason);
+process.on('unhandledRejection', captureClientRejection);
+for (const candidate of [
+  Promise.resolve(sharedPageClient),
+  Promise.reject(new Error('PRIVATE_REJECTED_CLIENT')),
+]) {
+  const composition = createLoginPageComposition({
+    clientDependencies: {
+      config: offlinePageConfig,
+      sdk: { createClient: () => candidate },
+    },
+  });
+  assertSanitizedPreparationFailure(composition, /PRIVATE_REJECTED_CLIENT/);
+}
+await new Promise((resolve) => setImmediate(resolve));
+process.removeListener('unhandledRejection', captureClientRejection);
+assert.deepEqual(unhandledClientRejections, []);
+
+let customThenCalls = 0;
+const customThenableComposition = createLoginPageComposition({
+  clientDependencies: {
+    config: offlinePageConfig,
+    sdk: {
+      createClient: () => ({
+        auth: {},
+        then() { customThenCalls += 1; },
+      }),
+    },
+  },
+});
+assertSanitizedPreparationFailure(customThenableComposition, /private/i);
+assert.equal(customThenCalls, 0, 'Custom thenable rejection must not invoke then()');
+
+const hostileInjectedError = new Proxy(new Error('PRIVATE_HOSTILE_PROXY'), {
+  getPrototypeOf() { throw new Error('PRIVATE_GET_PROTOTYPE_TRAP'); },
+});
+assertSanitizedPreparationFailure(createLoginPageComposition({
+  clientOwner: {
+    initialize() { throw hostileInjectedError; },
+  },
+}), /PRIVATE_HOSTILE_PROXY|PRIVATE_GET_PROTOTYPE_TRAP/);
+
+assertSanitizedPreparationFailure(createLoginPageComposition({
+  clientOwner: {
+    initialize() {
+      throw new SupabaseConfigurationError('PRIVATE_INJECTED_CONFIGURATION_ERROR');
+    },
+  },
+}), /PRIVATE_INJECTED_CONFIGURATION_ERROR/);
+
+assertSanitizedPreparationFailure(createLoginPageComposition({
+  clientOwner: {
+    initialize() { throw new Error('PRIVATE_INJECTED_OWNER_ERROR'); },
+  },
+}), /PRIVATE_INJECTED_OWNER_ERROR/);
+
+const forgedConfigurationError = new Error('PRIVATE_FORGED_CONFIGURATION_ERROR');
+forgedConfigurationError.name = 'SupabaseConfigurationError';
+assertSanitizedPreparationFailure(createLoginPageComposition({
+  clientOwner: {
+    initialize() { throw forgedConfigurationError; },
+  },
+}), /PRIVATE_FORGED_CONFIGURATION_ERROR/);
+
+const trustedConfigurationComposition = createLoginPageComposition({
+  clientDependencies: {
+    config: {
+      url: 'http://unsafe.example',
+      publishableKey: offlinePageConfig.publishableKey,
+    },
+    sdk: { createClient: () => sharedPageClient },
+  },
+});
+assert.throws(
+  () => trustedConfigurationComposition.prepareClient(),
+  (error) => error instanceof SupabaseConfigurationError
+    && error.message === 'Supabase Project URL must be an HTTPS origin without credentials, paths, query parameters, or fragments.'
+    && error.cause === undefined
+);
+
+const injectedSafeMessageError = new SupabaseConfigurationError(
+  'Supabase Project URL is missing or malformed.'
+);
+injectedSafeMessageError.cause = new Error('PRIVATE_ALLOWLISTED_CAUSE');
+const injectedSafeMessageConfig = {
+  publishableKey: offlinePageConfig.publishableKey,
+};
+Object.defineProperty(injectedSafeMessageConfig, 'url', {
+  get() { throw injectedSafeMessageError; },
+});
+assert.throws(
+  () => createLoginPageComposition({
+    clientDependencies: {
+      config: injectedSafeMessageConfig,
+      sdk: { createClient: () => sharedPageClient },
+    },
+  }).prepareClient(),
+  (error) => error !== injectedSafeMessageError
+    && error.message === 'Supabase Project URL is missing or malformed.'
+    && error.cause === undefined
+    && !JSON.stringify(error).includes('PRIVATE_ALLOWLISTED_CAUSE')
+);
+
+for (const [property, marker, thrownError] of [
+  ['url', 'PRIVATE_REAL_URL', new SupabaseConfigurationError('PRIVATE_REAL_URL')],
+  ['publishableKey', 'PRIVATE_REAL_KEY', new SupabaseConfigurationError('PRIVATE_REAL_KEY')],
+  ['url', 'PRIVATE_ORDINARY_URL', new Error('PRIVATE_ORDINARY_URL')],
+]) {
+  const config = {
+    url: offlinePageConfig.url,
+    publishableKey: offlinePageConfig.publishableKey,
+  };
+  Object.defineProperty(config, property, {
+    get() { throw thrownError; },
+  });
+  assertSanitizedPreparationFailure(createLoginPageComposition({
+    clientDependencies: {
+      config,
+      sdk: { createClient: () => sharedPageClient },
+    },
+  }), new RegExp(marker));
+}
+
+const hostileTrustedMessage = new SupabaseConfigurationError('PRIVATE_HOSTILE_MESSAGE');
+Object.defineProperty(hostileTrustedMessage, 'message', {
+  get() { throw new Error('PRIVATE_HOSTILE_MESSAGE_GETTER'); },
+});
+const hostileTrustedConfig = {
+  publishableKey: offlinePageConfig.publishableKey,
+};
+Object.defineProperty(hostileTrustedConfig, 'url', {
+  get() { throw hostileTrustedMessage; },
+});
+assertSanitizedPreparationFailure(createLoginPageComposition({
+  clientDependencies: {
+    config: hostileTrustedConfig,
+    sdk: { createClient: () => sharedPageClient },
+  },
+}), /PRIVATE_HOSTILE_MESSAGE|PRIVATE_HOSTILE_MESSAGE_GETTER/);
+
+const hostileTrustedProxy = new Proxy(
+  new SupabaseConfigurationError('PRIVATE_TRUSTED_PROXY'),
+  {
+    getPrototypeOf() { throw new Error('PRIVATE_TRUSTED_PROTOTYPE'); },
+  }
+);
+const hostileTrustedProxyConfig = {
+  publishableKey: offlinePageConfig.publishableKey,
+};
+Object.defineProperty(hostileTrustedProxyConfig, 'url', {
+  get() { throw hostileTrustedProxy; },
+});
+assertSanitizedPreparationFailure(createLoginPageComposition({
+  clientDependencies: {
+    config: hostileTrustedProxyConfig,
+    sdk: { createClient: () => sharedPageClient },
+  },
+}), /PRIVATE_TRUSTED_PROXY|PRIVATE_TRUSTED_PROTOTYPE/);
+
+let transientPrivateConfigFailure = true;
+let transientPrivateConfigCreations = 0;
+const transientPrivateConfig = {
+  publishableKey: offlinePageConfig.publishableKey,
+};
+Object.defineProperty(transientPrivateConfig, 'url', {
+  get() {
+    if (transientPrivateConfigFailure) {
+      transientPrivateConfigFailure = false;
+      throw new SupabaseConfigurationError('PRIVATE_TRANSIENT_CONFIGURATION');
+    }
+    return offlinePageConfig.url;
+  },
+});
+const transientPrivateConfigComposition = createLoginPageComposition({
+  clientDependencies: {
+    config: transientPrivateConfig,
+    sdk: {
+      createClient() {
+        transientPrivateConfigCreations += 1;
+        return sharedPageClient;
+      },
+    },
+  },
+});
+assertSanitizedPreparationFailure(
+  transientPrivateConfigComposition,
+  /PRIVATE_TRANSIENT_CONFIGURATION/
+);
+assert.equal(transientPrivateConfigComposition.prepareClient(), sharedPageClient);
+assert.equal(transientPrivateConfigComposition.prepareClient(), sharedPageClient);
+assert.equal(transientPrivateConfigCreations, 1);
+
+let transientOwnerFactoryCalls = 0;
+const transientOwnerFactoryComposition = createLoginPageComposition({
+  clientDependencies: { config: offlinePageConfig, sdk: {} },
+  createClientOwner() {
+    transientOwnerFactoryCalls += 1;
+    if (transientOwnerFactoryCalls === 1) {
+      throw new SupabaseConfigurationError('PRIVATE_OWNER_CREATION_ERROR');
+    }
+    return { initialize: () => sharedPageClient };
+  },
+});
+assertSanitizedPreparationFailure(
+  transientOwnerFactoryComposition,
+  /PRIVATE_OWNER_CREATION_ERROR/
+);
+assert.equal(transientOwnerFactoryComposition.prepareClient(), sharedPageClient);
+assert.equal(transientOwnerFactoryComposition.prepareClient(), sharedPageClient);
+assert.equal(transientOwnerFactoryCalls, 2, 'Failed owner creation must not cache a partial owner');
+
+let ownerFactoryCalls = 0;
+let ownerInitializeCalls = 0;
+const injectedOwnerClient = Object.freeze({ auth: Object.freeze({}) });
+const injectedOwnerComposition = createLoginPageComposition({
+  clientDependencies: {
+    config: offlinePageConfig,
+    sdk: {},
+    profile: SUPABASE_CLIENT_PROFILE.FOUNDATION,
+  },
+  createClientOwner(options) {
+    ownerFactoryCalls += 1;
+    assert.equal(options.profile, SUPABASE_CLIENT_PROFILE.APPLICATION_SESSION);
+    return {
+      initialize(profile) {
+        ownerInitializeCalls += 1;
+        assert.equal(profile, SUPABASE_CLIENT_PROFILE.APPLICATION_SESSION);
+        return injectedOwnerClient;
+      },
+    };
+  },
+});
+assert.equal(ownerFactoryCalls, 0);
+assert.equal(injectedOwnerComposition.prepareClient(), injectedOwnerClient);
+assert.equal(injectedOwnerComposition.prepareClient(), injectedOwnerClient);
+assert.equal(ownerFactoryCalls, 1, 'One login lifecycle must create one owner');
+assert.equal(ownerInitializeCalls, 2, 'Repeated consumers may request the same owner client');
+
+let reentrantComposition;
+let reentrantClientCreations = 0;
+let nestedPreparationError = '';
+const reentrantClient = Object.freeze({ auth: Object.freeze({}) });
+reentrantComposition = createLoginPageComposition({
+  clientDependencies: {
+    config: offlinePageConfig,
+    sdk: {
+      createClient() {
+        reentrantClientCreations += 1;
+        try {
+          reentrantComposition.prepareClient();
+        } catch (error) {
+          nestedPreparationError = error.message;
+        }
+        return reentrantClient;
+      },
+    },
+  },
+});
+assert.equal(reentrantComposition.prepareClient(), reentrantClient);
+assert.match(nestedPreparationError, /already in progress/i);
+assert.equal(reentrantClientCreations, 1, 'Reentrant preparation must not construct a second client');
+assert.equal(reentrantComposition.prepareClient(), reentrantClient);
+
+let independentPageCreations = 0;
+const independentPageSdk = {
+  createClient() {
+    independentPageCreations += 1;
+    return Object.freeze({ page: independentPageCreations, auth: Object.freeze({}) });
+  },
+};
+const firstLoginPage = createLoginPageComposition({
+  clientDependencies: { config: offlinePageConfig, sdk: independentPageSdk },
+});
+const secondLoginPage = createLoginPageComposition({
+  clientDependencies: { config: offlinePageConfig, sdk: independentPageSdk },
+});
+assert.notEqual(firstLoginPage.prepareClient(), secondLoginPage.prepareClient());
+assert.equal(independentPageCreations, 2, 'Independent page lifecycles must own independent clients');
 
 const confirmedFake = createFakeClient();
 const confirmedResult = await createLoginService(confirmedFake.client).submit(validInput);
@@ -663,7 +1258,10 @@ assert.doesNotMatch(loginHtml, /login-browser\.js|supabase-client\.js|supabase-c
 assert.match(loginHtml, /<script type="module" src="js\/auth-ui\.js"><\/script>/);
 assert.match(loginHtml, /Authentication is not connected yet\. This form never sends or stores your credentials\./);
 const browserSource = await readFile(new URL('../js/login-browser.js', import.meta.url), 'utf8');
-assert.doesNotMatch(browserSource, /addEventListener|createClient|initializeSupabaseClient|supabase-config|\bfetch\s*\(|localStorage|sessionStorage/);
+assert.doesNotMatch(
+  browserSource,
+  /addEventListener|\bcreateClient\s*\(|initializeSupabaseClient|supabase-config|\bfetch\s*\(|localStorage|sessionStorage/
+);
 const authUiSource = await readFile(new URL('../js/auth-ui.js', import.meta.url), 'utf8');
 assert.match(authUiSource, /let pendingLoginOwnerToken = null;/, 'The shared pending owner must be an opaque token slot');
 assert.match(authUiSource, /const ownerToken = Symbol\(['"]login-operation-owner['"]\);/);
