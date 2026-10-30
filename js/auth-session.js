@@ -11,8 +11,34 @@ const PUBLIC_ERROR = Object.freeze({
   message: 'Account status is temporarily unavailable.',
 });
 
+function isNonArrayObject(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function isMeaningfulString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isExplicitSuccess(response) {
+  return Boolean(
+    isNonArrayObject(response)
+    && Object.prototype.hasOwnProperty.call(response, 'error')
+    && response.error === null
+  );
+}
+
+function consumeInvalidSubscriptionPromise(value) {
+  try {
+    if (!isNonArrayObject(value) || typeof value.then !== 'function') return false;
+    Promise.resolve(value).catch(() => {});
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function publicUser(user) {
-  if (!user || typeof user !== 'object' || typeof user.id !== 'string' || !user.id) return null;
+  if (!isNonArrayObject(user) || !isMeaningfulString(user.id)) return null;
   return Object.freeze({
     id: user.id,
     email: typeof user.email === 'string' ? user.email : '',
@@ -63,13 +89,21 @@ function isValidConfirmationTimestamp(value) {
  * accepted. Generic confirmation fields and user metadata fail closed.
  */
 export function isEmailConfirmed(user) {
-  if (!user || typeof user !== 'object') return false;
+  if (!isNonArrayObject(user)) return false;
   return isValidConfirmationTimestamp(user.email_confirmed_at);
 }
 
 function stateForSession(session) {
-  const user = publicUser(session?.user);
-  if (!user) return Object.freeze({ status: AUTH_SESSION_STATUS.GUEST, user: null });
+  if (session === null) return Object.freeze({ status: AUTH_SESSION_STATUS.GUEST, user: null });
+  if (
+    !isNonArrayObject(session)
+    || !isMeaningfulString(session.access_token)
+    || !isMeaningfulString(session.refresh_token)
+    || !isNonArrayObject(session.user)
+  ) return errorState();
+
+  const user = publicUser(session.user);
+  if (!user) return errorState();
   return Object.freeze({
     status: isEmailConfirmed(session.user)
       ? AUTH_SESSION_STATUS.AUTHENTICATED
@@ -80,6 +114,17 @@ function stateForSession(session) {
 
 function errorState() {
   return Object.freeze({ status: AUTH_SESSION_STATUS.ERROR, user: null, error: PUBLIC_ERROR });
+}
+
+function stateForSessionResponse(result) {
+  if (
+    !isExplicitSuccess(result)
+    || !Object.prototype.hasOwnProperty.call(result, 'data')
+    || !isNonArrayObject(result.data)
+    || !Object.prototype.hasOwnProperty.call(result.data, 'session')
+    || result.data.session === undefined
+  ) return errorState();
+  return stateForSession(result.data.session);
 }
 
 function requireAuthClient(client) {
@@ -122,18 +167,69 @@ export function createAuthSessionService(client) {
     return state;
   };
 
+  const processAuthEvent = (event, session) => {
+    if (cleanedUp) return state;
+    const eventGeneration = ++generation;
+    try {
+      let nextState;
+      if (event === 'SIGNED_OUT') {
+        nextState = session === null ? stateForSession(null) : errorState();
+      } else if (session === null && event !== 'INITIAL_SESSION') {
+        nextState = errorState();
+      } else {
+        nextState = stateForSession(session);
+      }
+      return cleanedUp || eventGeneration !== generation ? state : publish(nextState);
+    } catch {
+      return cleanedUp || eventGeneration !== generation ? state : publish(errorState());
+    }
+  };
+
   const installAuthSubscription = () => {
     if (authSubscription) return true;
-    const response = auth.onAuthStateChange((_event, session) => {
-      if (cleanedUp) return;
-      generation += 1;
-      publish(stateForSession(session));
+    let subscriptionAccepted = false;
+    let subscriptionRejected = false;
+    let queuedEvent = null;
+    const response = auth.onAuthStateChange((event, session) => {
+      if (cleanedUp || subscriptionRejected) return;
+      if (!subscriptionAccepted) {
+        queuedEvent = { event, session };
+        return;
+      }
+      processAuthEvent(event, session);
     });
-    const subscription = response?.data?.subscription;
-    if (!subscription || typeof subscription.unsubscribe !== 'function') {
+    const invalidSubscriptionPromise = consumeInvalidSubscriptionPromise(response);
+    if (
+      invalidSubscriptionPromise
+      || !isNonArrayObject(response)
+      || !Object.prototype.hasOwnProperty.call(response, 'data')
+      || !isNonArrayObject(response.data)
+      || !Object.prototype.hasOwnProperty.call(response.data, 'subscription')
+      || !isNonArrayObject(response.data.subscription)
+      || typeof response.data.subscription.unsubscribe !== 'function'
+    ) {
+      subscriptionRejected = true;
+      queuedEvent = null;
       throw new TypeError('Supabase Auth subscription is unavailable.');
     }
+
+    const subscription = response.data.subscription;
+    if (cleanedUp) {
+      subscriptionRejected = true;
+      queuedEvent = null;
+      try {
+        subscription.unsubscribe();
+      } catch {
+        // Cleanup already owns the lifecycle; provider failures remain private.
+      }
+      return false;
+    }
+
     authSubscription = subscription;
+    subscriptionAccepted = true;
+    const acceptedEvent = queuedEvent;
+    queuedEvent = null;
+    if (acceptedEvent) processAuthEvent(acceptedEvent.event, acceptedEvent.session);
     return true;
   };
 
@@ -166,11 +262,10 @@ export function createAuthSessionService(client) {
         const bootstrapGeneration = ++generation;
         bootstrapPromise = (async () => {
           try {
-            installAuthSubscription();
+            if (!installAuthSubscription()) return state;
             const result = await auth.getSession();
             if (cleanedUp || bootstrapGeneration !== generation) return state;
-            if (!result || typeof result !== 'object' || result.error) return publish(errorState());
-            return publish(stateForSession(result.data?.session));
+            return publish(stateForSessionResponse(result));
           } catch {
             if (cleanedUp || bootstrapGeneration !== generation) return state;
             return publish(errorState());
@@ -187,7 +282,7 @@ export function createAuthSessionService(client) {
       try {
         const result = await auth.signOut({ scope: 'local' });
         if (cleanedUp || logoutGeneration !== generation) return state;
-        if (!result || typeof result !== 'object' || result.error) return publish(errorState());
+        if (!isExplicitSuccess(result)) return publish(errorState());
         return publish(Object.freeze({ status: AUTH_SESSION_STATUS.GUEST, user: null }));
       } catch {
         if (cleanedUp || logoutGeneration !== generation) return state;
@@ -199,9 +294,14 @@ export function createAuthSessionService(client) {
       if (cleanedUp) return false;
       cleanedUp = true;
       generation += 1;
-      authSubscription?.unsubscribe();
+      const subscription = authSubscription;
       authSubscription = null;
       listeners.clear();
+      try {
+        subscription?.unsubscribe();
+      } catch {
+        // Local references are already cleared; provider cleanup failures stay private.
+      }
       return true;
     },
   });
