@@ -1,4 +1,5 @@
-import { createPkceBrowserInitializer } from './supabase-browser.js';
+import { createSupabasePageClientOwner } from './supabase-browser.js';
+import { SUPABASE_CLIENT_PROFILE } from './supabase-client.js';
 import {
   CONFIRMATION_MESSAGES,
   CONFIRMATION_STATUS,
@@ -18,12 +19,21 @@ export const CALLBACK_CLIENT_STATE = Object.freeze({
  * Creates an explicit, callback-scoped PKCE client initialization context.
  * Importing this module never reads configuration or constructs a client.
  */
-export function createCallbackClientInitialization(dependencies) {
-  const initializer = createPkceBrowserInitializer(dependencies);
+export function createCallbackClientInitialization({
+  config,
+  sdk,
+  owner = createSupabasePageClientOwner({
+    config,
+    sdk,
+    profile: SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION,
+  }),
+} = {}) {
 
   return Object.freeze({
+    profile: SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION,
+
     initialize() {
-      return initializer.initialize();
+      return owner.initialize(SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION);
     },
   });
 }
@@ -199,30 +209,58 @@ function setReadinessState(root, state) {
 
 export function createCallbackPageInitialization({ loadConfig, sdk, root } = {}) {
   let initializationPromise;
+  let preparedClientInitialization;
+  let readinessSucceeded = false;
+
+  const sharedClientInitialization = Object.freeze({
+    initialize() {
+      if (!readinessSucceeded || !preparedClientInitialization) {
+        throw new TypeError('Callback client readiness has not completed.');
+      }
+      return preparedClientInitialization.initialize();
+    },
+  });
 
   return Object.freeze({
     initialize() {
       if (!initializationPromise) {
-        initializationPromise = (async () => {
+        const attempt = (async () => {
           try {
             if (typeof loadConfig !== 'function') throw new TypeError('Public configuration loader is unavailable.');
 
-            const configModule = await loadConfig();
-            const initialization = createCallbackClientInitialization({
-              config: configModule?.SUPABASE_CONFIG,
-              sdk,
-            });
-            initialization.initialize();
+            if (!preparedClientInitialization) {
+              const configModule = await loadConfig();
+              preparedClientInitialization = createCallbackClientInitialization({
+                config: configModule?.SUPABASE_CONFIG,
+                sdk,
+              });
+            }
+            preparedClientInitialization.initialize();
             setReadinessState(root, CALLBACK_CLIENT_STATE.READY);
+            readinessSucceeded = true;
             return CALLBACK_CLIENT_STATE.READY;
           } catch {
+            readinessSucceeded = false;
             setReadinessState(root, CALLBACK_CLIENT_STATE.UNAVAILABLE);
             return CALLBACK_CLIENT_STATE.UNAVAILABLE;
           }
         })();
+        initializationPromise = attempt;
+        void attempt.then((state) => {
+          if (state === CALLBACK_CLIENT_STATE.UNAVAILABLE && initializationPromise === attempt) {
+            initializationPromise = null;
+          }
+        });
       }
 
       return initializationPromise;
+    },
+
+    createConfirmationComposition(options = {}) {
+      return createCallbackConfirmationComposition({
+        ...options,
+        clientInitialization: sharedClientInitialization,
+      });
     },
   });
 }

@@ -18,6 +18,7 @@ import {
   createCallbackClientInitialization,
   createCallbackPageInitialization,
 } from '../js/auth-callback-browser.js';
+import { SUPABASE_CLIENT_PROFILE } from '../js/supabase-client.js';
 
 const callback = 'http://localhost/RecipeFinder/auth-callback.html';
 const secret = 'sensitive-test-value';
@@ -53,6 +54,7 @@ const callbackClientInitialization = createCallbackClientInitialization({
   sdk: offlineSdk,
 });
 assert.equal(callbackClientCreations, 0, 'Importing and preparing the callback initializer must remain inert');
+assert.equal(callbackClientInitialization.profile, SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION);
 assert.equal(callbackClientInitialization.initialize(), offlineCallbackClient);
 assert.equal(callbackClientInitialization.initialize(), offlineCallbackClient);
 assert.equal(callbackClientCreations, 1, 'One callback context must cache one client');
@@ -83,6 +85,24 @@ assert.equal(await firstPageInitialization, CALLBACK_CLIENT_STATE.READY);
 assert.equal(callbackConfigLoads, 1, 'The ignored configuration module must be requested once per callback context');
 assert.equal(callbackClientCreations, 2, 'Callback page initialization must construct exactly one additional client');
 assert.equal(readinessRoot.dataset.supabaseClientState, CALLBACK_CLIENT_STATE.READY);
+
+let retryClientCreations = 0;
+const retryClient = Object.freeze({ auth: Object.freeze({}) });
+const retryInitialization = createCallbackPageInitialization({
+  loadConfig: async () => ({ SUPABASE_CONFIG: offlinePublicConfig }),
+  sdk: {
+    createClient() {
+      retryClientCreations += 1;
+      if (retryClientCreations === 1) throw new Error('private initialization detail');
+      return retryClient;
+    },
+  },
+  root: { dataset: {} },
+});
+assert.equal(await retryInitialization.initialize(), CALLBACK_CLIENT_STATE.UNAVAILABLE);
+assert.equal(await retryInitialization.initialize(), CALLBACK_CLIENT_STATE.READY);
+assert.equal(await retryInitialization.initialize(), CALLBACK_CLIENT_STATE.READY);
+assert.equal(retryClientCreations, 2, 'A failed shared-owner initialization must permit one later retry');
 
 for (const unavailableCase of [
   {
@@ -376,7 +396,8 @@ assert.equal(source.includes(secret), false, 'Fake authorization values must nev
 assert.doesNotMatch(source, /supabase-client|supabase-browser|supabase-config|createClient/);
 
 const browserSource = await readFile(new URL('../js/auth-callback-browser.js', import.meta.url), 'utf8');
-assert.match(browserSource, /createPkceBrowserInitializer/);
+assert.match(browserSource, /createSupabasePageClientOwner/);
+assert.match(browserSource, /SUPABASE_CLIENT_PROFILE\.PKCE_PREPARATION/);
 assert.match(browserSource, /import\('\.\/supabase-config\.js'\)/, 'The ignored config must be loaded only at runtime');
 assert.doesNotMatch(browserSource, /^import\s+.*supabase-config\.js/m, 'The ignored config must not be a static import');
 assert.doesNotMatch(browserSource, /verifyOtp|getSession|signUp|signInWithPassword|onAuthStateChange/);

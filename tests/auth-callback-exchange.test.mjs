@@ -8,7 +8,9 @@ import {
 } from '../js/auth-callback.js';
 import { createPkceCodeExchangeAdapter } from '../js/auth-callback-exchange.js';
 import {
+  CALLBACK_CLIENT_STATE,
   createCallbackConfirmationComposition,
+  createCallbackPageInitialization,
   createManualLoginConfirmationOrchestration,
 } from '../js/auth-callback-browser.js';
 
@@ -241,6 +243,271 @@ for (const signOutResult of invalidSignOutResults) {
   }, 'Local sign-out success requires an explicit own error property equal to null');
 }
 
+let sharedSdkCreations = 0;
+let sharedExchangeCalls = 0;
+let sharedSignOutCalls = 0;
+let sharedSignInCalls = 0;
+let sharedSubscriptionCalls = 0;
+let sharedOrchestrationClient;
+const sharedCallbackClient = Object.freeze({
+  auth: Object.freeze({
+    onAuthStateChange() {
+      sharedSubscriptionCalls += 1;
+    },
+    signInWithPassword() {
+      sharedSignInCalls += 1;
+    },
+    async exchangeCodeForSession() {
+      sharedExchangeCalls += 1;
+      return { data: { session: confirmedSession() }, error: null };
+    },
+    async signOut() {
+      sharedSignOutCalls += 1;
+      return { error: null };
+    },
+  }),
+});
+const sharedPageLifecycle = createCallbackPageInitialization({
+  loadConfig: async () => ({
+    SUPABASE_CONFIG: {
+      url: 'https://recipefinder-test.supabase.co',
+      publishableKey: 'sb_publishable_test_abcdefghijklmnopqrstuvwxyz',
+    },
+  }),
+  sdk: {
+    createClient(_url, _key, options) {
+      sharedSdkCreations += 1;
+      assert.equal(options.auth.flowType, 'pkce');
+      assert.equal(options.auth.persistSession, true);
+      assert.equal(options.auth.autoRefreshToken, false);
+      assert.equal(options.auth.detectSessionInUrl, false);
+      assert.equal(options.auth.skipAutoInitialize, true);
+      return sharedCallbackClient;
+    },
+  },
+  root: { dataset: {} },
+});
+const sharedPreparedComposition = sharedPageLifecycle.createConfirmationComposition({
+  preparedCallback: orchestrationPreparedCallback,
+  root: {},
+  createOrchestration({ client }) {
+    sharedOrchestrationClient = client;
+    return { activate: async () => ({
+      status: CONFIRMATION_STATUS.UNAVAILABLE,
+      message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+    }) };
+  },
+  createView: (result) => result,
+  renderView() {},
+});
+assert.equal(sharedSdkCreations, 0, 'Page lifecycle and composition construction must remain inert');
+assert.equal(sharedExchangeCalls, 0, 'Prepared composition must not exchange before explicit activation');
+assert.equal(sharedSignOutCalls, 0, 'Prepared composition must not sign out before explicit activation');
+assert.equal(sharedSignInCalls, 0, 'Prepared composition must not sign in');
+assert.equal(sharedSubscriptionCalls, 0, 'Prepared composition must not subscribe to Auth state');
+assert.equal(await sharedPageLifecycle.initialize(), CALLBACK_CLIENT_STATE.READY);
+assert.equal(await sharedPageLifecycle.initialize(), CALLBACK_CLIENT_STATE.READY);
+assert.equal(sharedSdkCreations, 1, 'Readiness must construct one shared page client');
+assert.equal(sharedExchangeCalls, 0);
+assert.equal(sharedSignOutCalls, 0);
+assert.equal(sharedSignInCalls, 0);
+assert.equal(sharedSubscriptionCalls, 0);
+await sharedPreparedComposition.activate();
+assert.equal(sharedOrchestrationClient, sharedCallbackClient, 'Readiness and composition must share client identity');
+assert.equal(sharedSdkCreations, 1, 'Explicit composition must reuse the readiness client');
+assert.equal(sharedExchangeCalls, 0, 'The injected inert orchestration must not exchange');
+assert.equal(sharedSignOutCalls, 0, 'The injected inert orchestration must not sign out');
+assert.equal(sharedSignInCalls, 0, 'The shared callback lifecycle must not sign in');
+assert.equal(sharedSubscriptionCalls, 0, 'The shared callback lifecycle must not subscribe');
+
+function deferredReadiness() {
+  let resolve;
+  const promise = new Promise((accept) => { resolve = accept; });
+  return { promise, resolve };
+}
+
+let beforeReadinessCreations = 0;
+let beforeReadinessOrchestrations = 0;
+const beforeReadinessLifecycle = createCallbackPageInitialization({
+  loadConfig: async () => ({
+    SUPABASE_CONFIG: {
+      url: 'https://recipefinder-test.supabase.co',
+      publishableKey: 'sb_publishable_test_abcdefghijklmnopqrstuvwxyz',
+    },
+  }),
+  sdk: {
+    createClient() {
+      beforeReadinessCreations += 1;
+      return sharedCallbackClient;
+    },
+  },
+  root: { dataset: {} },
+});
+const beforeReadinessComposition = beforeReadinessLifecycle.createConfirmationComposition({
+  preparedCallback: orchestrationPreparedCallback,
+  root: {},
+  createOrchestration() {
+    beforeReadinessOrchestrations += 1;
+    return { activate: async () => ({
+      status: CONFIRMATION_STATUS.CONFIRMED,
+      message: CONFIRMATION_MESSAGES.CONFIRMED,
+    }) };
+  },
+  createView: (result) => result,
+  renderView() {},
+});
+assert.deepEqual(await beforeReadinessComposition.activate(), {
+  status: CONFIRMATION_STATUS.UNAVAILABLE,
+  message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+}, 'Composition activation before readiness must fail closed');
+assert.equal(beforeReadinessCreations, 0);
+assert.equal(beforeReadinessOrchestrations, 0);
+
+const pendingConfig = deferredReadiness();
+let pendingReadinessCreations = 0;
+let pendingReadinessOrchestrations = 0;
+const pendingReadinessLifecycle = createCallbackPageInitialization({
+  loadConfig: () => pendingConfig.promise,
+  sdk: {
+    createClient() {
+      pendingReadinessCreations += 1;
+      return sharedCallbackClient;
+    },
+  },
+  root: { dataset: {} },
+});
+const pendingReadinessAttempt = pendingReadinessLifecycle.initialize();
+const pendingReadinessComposition = pendingReadinessLifecycle.createConfirmationComposition({
+  preparedCallback: orchestrationPreparedCallback,
+  root: {},
+  createOrchestration() {
+    pendingReadinessOrchestrations += 1;
+    return { activate: async () => ({
+      status: CONFIRMATION_STATUS.CONFIRMED,
+      message: CONFIRMATION_MESSAGES.CONFIRMED,
+    }) };
+  },
+  createView: (result) => result,
+  renderView() {},
+});
+assert.deepEqual(await pendingReadinessComposition.activate(), {
+  status: CONFIRMATION_STATUS.UNAVAILABLE,
+  message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+}, 'Pending readiness must not authorize composition activation');
+assert.equal(pendingReadinessCreations, 0);
+assert.equal(pendingReadinessOrchestrations, 0);
+pendingConfig.resolve({
+  SUPABASE_CONFIG: {
+    url: 'https://recipefinder-test.supabase.co',
+    publishableKey: 'sb_publishable_test_abcdefghijklmnopqrstuvwxyz',
+  },
+});
+assert.equal(await pendingReadinessAttempt, CALLBACK_CLIENT_STATE.READY);
+assert.equal(pendingReadinessCreations, 1);
+
+let gatedRetryCreations = 0;
+let gatedRetryOrchestrations = 0;
+let gatedRetryClient;
+const gatedAcceptedClient = Object.freeze({ auth: Object.freeze({}) });
+const gatedRetryLifecycle = createCallbackPageInitialization({
+  loadConfig: async () => ({
+    SUPABASE_CONFIG: {
+      url: 'https://recipefinder-test.supabase.co',
+      publishableKey: 'sb_publishable_test_abcdefghijklmnopqrstuvwxyz',
+    },
+  }),
+  sdk: {
+    createClient() {
+      gatedRetryCreations += 1;
+      if (gatedRetryCreations === 1) throw new Error('private readiness failure');
+      return gatedAcceptedClient;
+    },
+  },
+  root: { dataset: {} },
+});
+assert.equal(await gatedRetryLifecycle.initialize(), CALLBACK_CLIENT_STATE.UNAVAILABLE);
+const blockedAfterFailure = gatedRetryLifecycle.createConfirmationComposition({
+  preparedCallback: orchestrationPreparedCallback,
+  root: {},
+  createOrchestration() {
+    gatedRetryOrchestrations += 1;
+    return { activate: async () => ({
+      status: CONFIRMATION_STATUS.CONFIRMED,
+      message: CONFIRMATION_MESSAGES.CONFIRMED,
+    }) };
+  },
+  createView: (result) => result,
+  renderView() {},
+});
+assert.deepEqual(await blockedAfterFailure.activate(), {
+  status: CONFIRMATION_STATUS.UNAVAILABLE,
+  message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+}, 'Failed readiness must not authorize composition activation');
+assert.equal(gatedRetryCreations, 1, 'Composition must not retry the failed owner');
+assert.equal(gatedRetryOrchestrations, 0, 'Composition must not orchestrate after failed readiness');
+
+assert.equal(await gatedRetryLifecycle.initialize(), CALLBACK_CLIENT_STATE.READY);
+assert.equal(gatedRetryCreations, 2, 'Only explicit readiness retry may reconstruct the client');
+const recoveredComposition = gatedRetryLifecycle.createConfirmationComposition({
+  preparedCallback: orchestrationPreparedCallback,
+  root: {},
+  createOrchestration({ client }) {
+    gatedRetryOrchestrations += 1;
+    gatedRetryClient = client;
+    return { activate: async () => ({
+      status: CONFIRMATION_STATUS.CONFIRMED,
+      message: CONFIRMATION_MESSAGES.CONFIRMED,
+    }) };
+  },
+  createView: (result) => result,
+  renderView() {},
+});
+const firstRecoveredActivation = recoveredComposition.activate();
+const duplicateRecoveredActivation = recoveredComposition.activate();
+assert.equal(firstRecoveredActivation, duplicateRecoveredActivation);
+assert.deepEqual(await firstRecoveredActivation, {
+  status: CONFIRMATION_STATUS.CONFIRMED,
+  message: CONFIRMATION_MESSAGES.CONFIRMED,
+});
+assert.equal(gatedRetryOrchestrations, 1);
+assert.equal(gatedRetryClient, gatedAcceptedClient, 'Successful retry must expose the accepted shared client');
+assert.equal(gatedRetryCreations, 2, 'Composition must reuse the successfully retried client');
+
+let malformedReadinessCreations = 0;
+let malformedReadinessOrchestrations = 0;
+const malformedReadinessLifecycle = createCallbackPageInitialization({
+  loadConfig: async () => ({
+    SUPABASE_CONFIG: {
+      url: 'https://recipefinder-test.supabase.co',
+      publishableKey: 'sb_publishable_test_abcdefghijklmnopqrstuvwxyz',
+    },
+  }),
+  sdk: {
+    createClient() {
+      malformedReadinessCreations += 1;
+      return {};
+    },
+  },
+  root: { dataset: {} },
+});
+assert.equal(await malformedReadinessLifecycle.initialize(), CALLBACK_CLIENT_STATE.UNAVAILABLE);
+const malformedReadinessComposition = malformedReadinessLifecycle.createConfirmationComposition({
+  preparedCallback: orchestrationPreparedCallback,
+  root: {},
+  createOrchestration() {
+    malformedReadinessOrchestrations += 1;
+    return { activate: async () => ({
+      status: CONFIRMATION_STATUS.CONFIRMED,
+      message: CONFIRMATION_MESSAGES.CONFIRMED,
+    }) };
+  },
+  createView: (result) => result,
+  renderView() {},
+});
+assert.equal((await malformedReadinessComposition.activate()).status, CONFIRMATION_STATUS.UNAVAILABLE);
+assert.equal(malformedReadinessCreations, 1, 'Composition must not retry a malformed readiness result');
+assert.equal(malformedReadinessOrchestrations, 0);
+
 for (const failingClient of [
   null,
   { auth: {} },
@@ -394,8 +661,18 @@ assert.equal(
 );
 assert.equal(
   callbackBrowserSource.match(/createCallbackConfirmationComposition\s*\(/g)?.length,
-  1,
-  'The callback lifecycle composition must be declared but never invoked by page load'
+  2,
+  'The callback lifecycle composition may be created explicitly but must never be invoked by page load'
+);
+assert.match(
+  callbackBrowserSource,
+  /const pageInitialization = createCallbackPageInitialization[\s\S]*void pageInitialization\.initialize\(\);/,
+  'The live page entrypoint must invoke readiness only'
+);
+assert.doesNotMatch(
+  callbackBrowserSource,
+  /pageInitialization\.createConfirmationComposition\s*\(/,
+  'The live page entrypoint must not create the exchange composition'
 );
 
 const combinedSafeOutput = JSON.stringify({
