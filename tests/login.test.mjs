@@ -13,6 +13,7 @@ import {
 } from '../js/auth-ui.js';
 import {
   createLoginControllerActivation,
+  createLiveLoginPageActivation,
   createLoginPageComposition,
 } from '../js/login-browser.js';
 import {
@@ -1253,15 +1254,241 @@ assert.equal(crossContextFormB.status.textContent, LOGIN_MESSAGES.AUTHENTICATED)
 assert.equal(crossContextActivationB.cleanup(), true);
 assert.equal(crossContextActivationB.cleanup(), false);
 
+const liveLoginButton = { disabled: true };
+const liveLoginForm = { querySelector: () => liveLoginButton, setAttribute() {} };
+let liveControllerOptions;
+let liveControllerActivations = 0;
+const navigations = [];
+const liveLogin = createLiveLoginPageActivation({
+  loadConfig: async () => ({ SUPABASE_CONFIG: offlinePageConfig }),
+  sdk: {},
+  document: { querySelector: () => liveLoginForm },
+  navigate: (destination) => navigations.push(destination),
+  createPageComposition() {
+    return {
+      prepareController(options) {
+        liveControllerOptions = options;
+        return {
+          activate() { liveControllerActivations += 1; return true; },
+          cleanup() { return true; },
+        };
+      },
+    };
+  },
+});
+assert.equal(await liveLogin.activate(), true);
+assert.equal(await liveLogin.activate(), true);
+assert.equal(liveControllerActivations, 1);
+assert.equal(liveLoginButton.disabled, false);
+const liveLoginService = liveControllerOptions.createService(createFakeClient().client);
+assert.equal((await liveLoginService.submit(validInput)).status, LOGIN_STATUS.AUTHENTICATED);
+assert.deepEqual(navigations, ['index.html'], 'Confirmed login must navigate only to the fixed dashboard destination');
+assert.equal(liveLogin.cleanup(), true);
+assert.equal(liveLoginButton.disabled, true);
+
+const noNavigation = [];
+let unavailableControllerCalls = 0;
+const unavailableLiveLogin = createLiveLoginPageActivation({
+  loadConfig: async () => { throw new Error('private configuration detail'); },
+  document: { querySelector: () => liveLoginForm },
+  navigate: (destination) => noNavigation.push(destination),
+  createPageComposition() { unavailableControllerCalls += 1; },
+});
+assert.equal(await unavailableLiveLogin.activate(), false);
+assert.equal(unavailableControllerCalls, 0);
+assert.deepEqual(noNavigation, []);
+
+const unconfirmedLiveService = liveControllerOptions.createService(createFakeClient({
+  signIn: () => ({
+    data: authData({ ...confirmedUser, email_confirmed_at: null }),
+    error: null,
+  }),
+}).client);
+assert.equal((await unconfirmedLiveService.submit(validInput)).status, LOGIN_STATUS.PENDING_CONFIRMATION);
+assert.deepEqual(navigations, ['index.html'], 'Pending confirmation must never navigate');
+
+let liveLoginConfigAttempts = 0;
+const retryingLiveLogin = createLiveLoginPageActivation({
+  loadConfig: async () => {
+    liveLoginConfigAttempts += 1;
+    if (liveLoginConfigAttempts === 1) throw new Error('transient private configuration detail');
+    return { SUPABASE_CONFIG: offlinePageConfig };
+  },
+  document: { querySelector: () => liveLoginForm },
+  createPageComposition: () => ({
+    prepareController: () => ({ activate: () => true, cleanup: () => true }),
+  }),
+});
+assert.equal(await retryingLiveLogin.activate(), false);
+assert.equal(await retryingLiveLogin.activate(), true);
+assert.equal(liveLoginConfigAttempts, 2);
+
+function createLoginReadinessUi() {
+  const submit = { disabled: true };
+  const status = { textContent: '', classList: { toggle(_name, value) { status.isError = value; } } };
+  const attributes = new Map();
+  const form = {
+    querySelector(selector) {
+      if (selector === '[type="submit"]') return submit;
+      if (selector === '[data-form-status]') return status;
+      return null;
+    },
+    setAttribute(name, value) { attributes.set(name, value); },
+  };
+  return { document: { querySelector: () => form }, submit, status, attributes };
+}
+
+const pendingLoginConfig = deferred();
+const cleanupLoginUi = createLoginReadinessUi();
+let retiredLoginInstalls = 0;
+const retiredNavigations = [];
+const cleanupPendingLogin = createLiveLoginPageActivation({
+  loadConfig: () => pendingLoginConfig.promise,
+  document: cleanupLoginUi.document,
+  navigate: (destination) => retiredNavigations.push(destination),
+  createPageComposition: () => ({
+    prepareController: () => ({
+      activate() { retiredLoginInstalls += 1; return true; },
+      cleanup: () => true,
+    }),
+  }),
+});
+const pendingLoginActivation = cleanupPendingLogin.activate();
+assert.equal(cleanupLoginUi.attributes.get('aria-busy'), 'true');
+assert.match(cleanupLoginUi.status.textContent, /preparing/i);
+assert.equal(cleanupPendingLogin.cleanup(), true);
+assert.equal(cleanupPendingLogin.cleanup(), false, 'Live login cleanup must be idempotent');
+pendingLoginConfig.resolve({ SUPABASE_CONFIG: offlinePageConfig });
+assert.equal(await pendingLoginActivation, false);
+assert.equal(retiredLoginInstalls, 0, 'Cleanup must prevent late login controller installation');
+assert.deepEqual(retiredNavigations, []);
+assert.equal(cleanupLoginUi.attributes.get('aria-busy'), 'false');
+assert.equal(cleanupLoginUi.submit.disabled, true);
+assert.equal(cleanupLoginUi.status.textContent, LOGIN_MESSAGES.UNAVAILABLE);
+assert.equal(await cleanupPendingLogin.activate(), false, 'A retired login lifecycle cannot reactivate');
+
+let retrySdkConstructions = 0;
+let retryCompositionCreations = 0;
+const retryIdentityUi = createLoginReadinessUi();
+const retryIdentityLogin = createLiveLoginPageActivation({
+  loadConfig: async () => ({ SUPABASE_CONFIG: offlinePageConfig }),
+  sdk: {
+    createClient() {
+      retrySdkConstructions += 1;
+      return createFakeClient().client;
+    },
+  },
+  document: retryIdentityUi.document,
+  createPageComposition(options) {
+    retryCompositionCreations += 1;
+    const page = createLoginPageComposition(options);
+    return {
+      prepareController(controllerOptions) {
+        return page.prepareController({
+          ...controllerOptions,
+          installController: () => retrySdkConstructions > 0 && retryIdentityLoginAttempts > 1,
+          removeController: () => true,
+        });
+      },
+    };
+  },
+});
+let retryIdentityLoginAttempts = 1;
+assert.equal(await retryIdentityLogin.activate(), false);
+retryIdentityLoginAttempts += 1;
+assert.equal(await retryIdentityLogin.activate(), true);
+assert.equal(retryCompositionCreations, 1, 'Retry must retain one page composition');
+assert.equal(retrySdkConstructions, 1, 'Retry must retain one accepted SDK client');
+
+const successfulLoginUi = createLoginReadinessUi();
+const accessibleLogin = createLiveLoginPageActivation({
+  loadConfig: async () => ({ SUPABASE_CONFIG: offlinePageConfig }),
+  document: successfulLoginUi.document,
+  createPageComposition: () => ({
+    prepareController: () => ({ activate: () => true, cleanup: () => true }),
+  }),
+});
+assert.equal(await accessibleLogin.activate(), true);
+assert.equal(successfulLoginUi.attributes.get('aria-busy'), 'false');
+assert.equal(successfulLoginUi.submit.disabled, false);
+assert.equal(successfulLoginUi.status.textContent, '');
+
+const retryLoginAnnouncementUi = createLoginReadinessUi();
+let retryLoginAnnouncementAttempts = 0;
+const retryLoginAnnouncement = createLiveLoginPageActivation({
+  loadConfig: async () => {
+    retryLoginAnnouncementAttempts += 1;
+    if (retryLoginAnnouncementAttempts === 1) throw new Error('PRIVATE_LOGIN_RETRY');
+    return { SUPABASE_CONFIG: offlinePageConfig };
+  },
+  document: retryLoginAnnouncementUi.document,
+  createPageComposition: () => ({
+    prepareController: () => ({ activate: () => true, cleanup: () => true }),
+  }),
+});
+assert.equal(await retryLoginAnnouncement.activate(), false);
+assert.equal(retryLoginAnnouncementUi.attributes.get('aria-busy'), 'false');
+assert.equal(retryLoginAnnouncementUi.status.textContent, LOGIN_MESSAGES.UNAVAILABLE);
+assert.equal(retryLoginAnnouncementUi.status.isError, true);
+assert.equal(await retryLoginAnnouncement.activate(), true);
+assert.equal(retryLoginAnnouncementUi.status.textContent, '');
+assert.equal(retryLoginAnnouncementUi.status.isError, false);
+
+const navigationResult = deferred();
+const staleNavigationUi = createLoginReadinessUi();
+const staleNavigations = [];
+let staleNavigationControllerOptions;
+const staleNavigationLogin = createLiveLoginPageActivation({
+  loadConfig: async () => ({ SUPABASE_CONFIG: offlinePageConfig }),
+  document: staleNavigationUi.document,
+  navigate: (destination) => staleNavigations.push(destination),
+  createPageComposition: () => ({
+    prepareController(options) {
+      staleNavigationControllerOptions = options;
+      return { activate: () => true, cleanup: () => true };
+    },
+  }),
+});
+assert.equal(await staleNavigationLogin.activate(), true);
+const staleNavigationService = staleNavigationControllerOptions.createService(createFakeClient({
+  signIn: () => navigationResult.promise,
+}).client);
+const staleLoginSubmission = staleNavigationService.submit(validInput);
+assert.equal(staleNavigationLogin.cleanup(), true);
+navigationResult.resolve({ data: authData(), error: null });
+assert.equal((await staleLoginSubmission).status, LOGIN_STATUS.AUTHENTICATED);
+assert.deepEqual(staleNavigations, [], 'Cleanup must suppress navigation from late authenticated results');
+
+for (const hostileLoginOptions of [
+  Object.defineProperty({}, 'loadConfig', {
+    get() { throw Object.assign(new Error('PRIVATE_LOGIN_OPTION'), { cause: 'PRIVATE_CAUSE', custom: 'PRIVATE_CUSTOM' }); },
+  }),
+  new Proxy({}, { get() { throw new Error('PRIVATE_LOGIN_PROXY'); } }),
+]) {
+  assert.throws(
+    () => createLiveLoginPageActivation(hostileLoginOptions),
+    (error) => error.message === 'Supabase client initialization failed.'
+      && error.cause === undefined
+      && error.custom === undefined
+      && !/PRIVATE/.test(error.message)
+  );
+}
+assert.doesNotThrow(() => createLiveLoginPageActivation(new Proxy({}, {
+  ownKeys() { throw new Error('PRIVATE_LOGIN_KEYS'); },
+})));
+
 const loginHtml = await readFile(new URL('../login.html', import.meta.url), 'utf8');
-assert.doesNotMatch(loginHtml, /login-browser\.js|supabase-client\.js|supabase-config\.js|supabase\.js/i);
+assert.match(loginHtml, /@supabase\/supabase-js@2\.118\.0/);
+assert.match(loginHtml, /integrity="sha384-TcHRA3zBbn\+Lexh5n\+Oil4guNPOS3rjNDpGRAN46u\/s\/mB2IZ50ceC6TYDU2yvgK"/);
+assert.match(loginHtml, /<script type="module" src="js\/login-browser\.js"><\/script>/);
 assert.match(loginHtml, /<script type="module" src="js\/auth-ui\.js"><\/script>/);
-assert.match(loginHtml, /Authentication is not connected yet\. This form never sends or stores your credentials\./);
+assert.match(loginHtml, /Remember Me is visual only/);
 const browserSource = await readFile(new URL('../js/login-browser.js', import.meta.url), 'utf8');
 assert.doesNotMatch(
   browserSource,
-  /addEventListener|\bcreateClient\s*\(|initializeSupabaseClient|supabase-config|\bfetch\s*\(|localStorage|sessionStorage/
+  /addEventListener|\bcreateClient\s*\(|initializeSupabaseClient|\bfetch\s*\(|localStorage|sessionStorage/
 );
+assert.match(browserSource, /import\('\.\/supabase-config\.js'\)/);
 const authUiSource = await readFile(new URL('../js/auth-ui.js', import.meta.url), 'utf8');
 assert.match(authUiSource, /let pendingLoginOwnerToken = null;/, 'The shared pending owner must be an opaque token slot');
 assert.match(authUiSource, /const ownerToken = Symbol\(['"]login-operation-owner['"]\);/);

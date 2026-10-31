@@ -4,6 +4,7 @@ import {
   REGISTRATION_MESSAGES,
   REGISTRATION_STATUS,
   createRegistrationService,
+  resolveRegistrationCallbackUrl,
   validateRegistrationInput,
 } from '../js/registration.js';
 import {
@@ -11,6 +12,7 @@ import {
   createRegistrationClientActivation,
   createRegistrationComposition,
   createRegistrationControllerActivation,
+  createLiveRegistrationPageActivation,
   createRegistrationPageInitialization,
 } from '../js/registration-browser.js';
 import {
@@ -954,6 +956,209 @@ assert.throws(
   /not approved/i
 );
 
+assert.equal(
+  resolveRegistrationCallbackUrl('http://localhost/RecipeFinder/register.html'),
+  'http://localhost/RecipeFinder/auth-callback.html'
+);
+assert.equal(
+  resolveRegistrationCallbackUrl('https://preview.recipefinder.example/register.html'),
+  'https://preview.recipefinder.example/auth-callback.html'
+);
+for (const rejectedRegistrationLocation of [
+  'http://example.com/register.html',
+  'https://user:password@example.com/register.html',
+  'https://example.com/register.html?next=https://evil.example',
+  'https://example.com/register.html#fragment',
+  'http://localhost/other/register.html',
+]) {
+  assert.throws(() => resolveRegistrationCallbackUrl(rejectedRegistrationLocation), /not approved/i);
+}
+assert.throws(
+  () => createRegistrationService(fakeClient, {
+    callbackUrl: 'https://evil.example/auth-callback.html',
+    applicationOrigin: 'https://recipefinder.example',
+  }),
+  /not approved/i
+);
+
+const liveRegistrationSubmit = { disabled: true };
+const liveRegistrationForm = {
+  querySelector: () => liveRegistrationSubmit,
+  setAttribute() {},
+};
+let liveRegistrationServiceFactory;
+let liveRegistrationActivations = 0;
+const liveRegistration = createLiveRegistrationPageActivation({
+  document: { querySelector: () => liveRegistrationForm },
+  location: { href: 'https://recipefinder.example/register.html' },
+  createPageInitialization() {
+    return {
+      initialize: async () => REGISTRATION_CLIENT_STATE.READY,
+      createComposition(options) {
+        liveRegistrationServiceFactory = options.createService;
+        return {
+          activate() { liveRegistrationActivations += 1; return true; },
+          cleanup() { return true; },
+        };
+      },
+    };
+  },
+});
+assert.equal(liveRegistrationSubmit.disabled, true);
+assert.equal(await liveRegistration.activate(), true);
+assert.equal(await liveRegistration.activate(), true, 'Live registration activation must be idempotent');
+assert.equal(liveRegistrationActivations, 1);
+assert.equal(liveRegistrationSubmit.disabled, false, 'Submission enables only after readiness and composition activation');
+let liveRedirectUrl;
+const liveRegistrationService = liveRegistrationServiceFactory({
+  auth: {
+    async signUp(request) {
+      liveRedirectUrl = request.options.emailRedirectTo;
+      return { data: { session: null }, error: null };
+    },
+    async signOut() { return { error: null }; },
+  },
+});
+assert.equal((await liveRegistrationService.submit(validInput)).status, REGISTRATION_STATUS.SUBMITTED);
+assert.equal(liveRedirectUrl, 'https://recipefinder.example/auth-callback.html');
+assert.equal(liveRegistration.cleanup(), true);
+assert.equal(liveRegistrationSubmit.disabled, true);
+
+const unavailableRegistrationSubmit = { disabled: true };
+let unavailableCompositionCalls = 0;
+const unavailableLiveRegistration = createLiveRegistrationPageActivation({
+  document: {
+    querySelector: () => ({
+      querySelector: () => unavailableRegistrationSubmit,
+      setAttribute() {},
+    }),
+  },
+  location: { href: 'https://recipefinder.example/register.html' },
+  createPageInitialization: () => ({
+    initialize: async () => REGISTRATION_CLIENT_STATE.UNAVAILABLE,
+    createComposition() { unavailableCompositionCalls += 1; },
+  }),
+});
+assert.equal(await unavailableLiveRegistration.activate(), false);
+assert.equal(unavailableCompositionCalls, 0);
+assert.equal(unavailableRegistrationSubmit.disabled, true);
+
+let liveRegistrationReadinessAttempts = 0;
+const retryingLiveRegistration = createLiveRegistrationPageActivation({
+  document: { querySelector: () => liveRegistrationForm },
+  location: { href: 'https://recipefinder.example/register.html' },
+  createPageInitialization: () => ({
+    async initialize() {
+      liveRegistrationReadinessAttempts += 1;
+      return liveRegistrationReadinessAttempts === 1
+        ? REGISTRATION_CLIENT_STATE.UNAVAILABLE
+        : REGISTRATION_CLIENT_STATE.READY;
+    },
+    createComposition: () => ({ activate: () => true, cleanup: () => true }),
+  }),
+});
+assert.equal(await retryingLiveRegistration.activate(), false);
+assert.equal(await retryingLiveRegistration.activate(), true);
+assert.equal(liveRegistrationReadinessAttempts, 2);
+
+function createRegistrationReadinessUi() {
+  const submit = { disabled: true };
+  const status = { textContent: '', classList: { toggle(_name, value) { status.isError = value; } } };
+  const attributes = new Map();
+  const form = {
+    querySelector(selector) {
+      if (selector === '[type="submit"]') return submit;
+      if (selector === '[data-form-status]') return status;
+      return null;
+    },
+    setAttribute(name, value) { attributes.set(name, value); },
+  };
+  return { document: { querySelector: () => form }, submit, status, attributes };
+}
+
+const pendingRegistrationReadiness = deferredRegistrationResult();
+const cleanupRegistrationUi = createRegistrationReadinessUi();
+let retiredRegistrationInstalls = 0;
+const cleanupPendingRegistration = createLiveRegistrationPageActivation({
+  document: cleanupRegistrationUi.document,
+  location: { href: 'https://recipefinder.example/register.html' },
+  createPageInitialization: () => ({
+    initialize: () => pendingRegistrationReadiness.promise,
+    createComposition: () => ({
+      activate() { retiredRegistrationInstalls += 1; return true; },
+      cleanup: () => true,
+    }),
+  }),
+});
+const pendingRegistrationActivation = cleanupPendingRegistration.activate();
+assert.equal(cleanupRegistrationUi.attributes.get('aria-busy'), 'true');
+assert.equal(cleanupRegistrationUi.submit.disabled, true);
+assert.match(cleanupRegistrationUi.status.textContent, /preparing/i);
+assert.equal(cleanupPendingRegistration.cleanup(), true);
+assert.equal(cleanupPendingRegistration.cleanup(), false, 'Live registration cleanup must be idempotent');
+pendingRegistrationReadiness.resolve(REGISTRATION_CLIENT_STATE.READY);
+assert.equal(await pendingRegistrationActivation, false);
+assert.equal(retiredRegistrationInstalls, 0, 'Cleanup must prevent late controller installation');
+assert.equal(cleanupRegistrationUi.attributes.get('aria-busy'), 'false');
+assert.equal(cleanupRegistrationUi.submit.disabled, true);
+assert.equal(cleanupRegistrationUi.status.textContent, REGISTRATION_MESSAGES.UNAVAILABLE);
+assert.equal(await cleanupPendingRegistration.activate(), false, 'A retired lifecycle cannot reactivate');
+
+const successfulRegistrationUi = createRegistrationReadinessUi();
+const accessibleRegistration = createLiveRegistrationPageActivation({
+  document: successfulRegistrationUi.document,
+  location: { href: 'https://recipefinder.example/register.html' },
+  createPageInitialization: () => ({
+    initialize: async () => REGISTRATION_CLIENT_STATE.READY,
+    createComposition: () => ({ activate: () => true, cleanup: () => true }),
+  }),
+});
+assert.equal(await accessibleRegistration.activate(), true);
+assert.equal(successfulRegistrationUi.attributes.get('aria-busy'), 'false');
+assert.equal(successfulRegistrationUi.submit.disabled, false);
+assert.equal(successfulRegistrationUi.status.textContent, '');
+
+const retryAnnouncementUi = createRegistrationReadinessUi();
+let retryAnnouncementAttempts = 0;
+const retryAnnouncementRegistration = createLiveRegistrationPageActivation({
+  document: retryAnnouncementUi.document,
+  location: { href: 'https://recipefinder.example/register.html' },
+  createPageInitialization: () => ({
+    async initialize() {
+      retryAnnouncementAttempts += 1;
+      return retryAnnouncementAttempts === 1
+        ? REGISTRATION_CLIENT_STATE.UNAVAILABLE
+        : REGISTRATION_CLIENT_STATE.READY;
+    },
+    createComposition: () => ({ activate: () => true, cleanup: () => true }),
+  }),
+});
+assert.equal(await retryAnnouncementRegistration.activate(), false);
+assert.equal(retryAnnouncementUi.attributes.get('aria-busy'), 'false');
+assert.equal(retryAnnouncementUi.status.textContent, REGISTRATION_MESSAGES.UNAVAILABLE);
+assert.equal(retryAnnouncementUi.status.isError, true);
+assert.equal(await retryAnnouncementRegistration.activate(), true);
+assert.equal(retryAnnouncementUi.status.textContent, '');
+assert.equal(retryAnnouncementUi.status.isError, false);
+
+for (const hostileRegistrationOptions of [
+  Object.defineProperty({}, 'loadConfig', {
+    get() { throw Object.assign(new Error('PRIVATE_REGISTRATION_OPTION'), { cause: 'PRIVATE_CAUSE', custom: 'PRIVATE_CUSTOM' }); },
+  }),
+  new Proxy({}, { get() { throw new Error('PRIVATE_REGISTRATION_PROXY'); } }),
+]) {
+  assert.throws(
+    () => createLiveRegistrationPageActivation(hostileRegistrationOptions),
+    (error) => error.message === 'Supabase client initialization failed.'
+      && error.cause === undefined
+      && error.custom === undefined
+      && !/PRIVATE/.test(error.message)
+  );
+}
+assert.doesNotThrow(() => createLiveRegistrationPageActivation(new Proxy({}, {
+  ownKeys() { throw new Error('PRIVATE_REGISTRATION_KEYS'); },
+})));
+
 const registerHtml = await readFile(new URL('../register.html', import.meta.url), 'utf8');
 const sdkUrl = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js';
 const sdkIntegrity = 'sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK';
@@ -992,8 +1197,8 @@ assert.equal(
   1,
   'The registration composition must be declared but never invoked by the live entrypoint'
 );
-assert.match(browserSource, /import \{ createRegistrationService \} from '\.\/registration\.js';/);
-assert.doesNotMatch(browserSource, /if \(typeof document !== ['"]undefined['"]\)/, 'Module import must not initialize Supabase');
+assert.match(browserSource, /createRegistrationService,[\s\S]*resolveRegistrationCallbackUrl/);
+assert.match(browserSource, /if \(typeof document !== ['"]undefined['"]\)/, 'The browser entrypoint must explicitly activate registration');
 
 const authUiSource = await readFile(new URL('../js/auth-ui.js', import.meta.url), 'utf8');
 assert.equal(authUiSource.match(/addEventListener\(['"]submit['"]/g)?.length, 1, 'The form must retain one submit listener');
@@ -1005,7 +1210,7 @@ assert.doesNotMatch(authUiSource, /pendingRegistrationController/, 'The module m
 assert.match(
   authUiSource,
   /Your details look ready\. No account was created and no email was sent\./,
-  'Preview-only registration messaging must remain the live default'
+  'Missing controller fallback must remain safe'
 );
 
 console.log('Offline registration preparation tests passed with fake clients only.');

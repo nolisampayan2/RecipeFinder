@@ -1,5 +1,5 @@
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const CALLBACK_URL = 'http://localhost/RecipeFinder/auth-callback.html';
+const LOCAL_CALLBACK_URL = 'http://localhost/RecipeFinder/auth-callback.html';
 
 export const REGISTRATION_STATUS = Object.freeze({
   INVALID: 'invalid',
@@ -73,7 +73,59 @@ export function validateRegistrationInput(input = {}) {
   });
 }
 
-export function createRegistrationService(client, { callbackUrl = CALLBACK_URL } = {}) {
+function parseOrigin(value) {
+  if (typeof value !== 'string' || value !== value.trim()) return null;
+  try {
+    const parsed = new URL(value);
+    if (parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+export function resolveRegistrationCallbackUrl(locationLike = globalThis.location) {
+  let pageUrl;
+  try {
+    const href = typeof locationLike === 'string' ? locationLike : locationLike?.href;
+    pageUrl = new URL(href);
+  } catch {
+    throw new TypeError('The registration callback URL is not approved.');
+  }
+
+  if (pageUrl.username || pageUrl.password || pageUrl.search || pageUrl.hash) {
+    throw new TypeError('The registration callback URL is not approved.');
+  }
+  if (pageUrl.origin === 'http://localhost' && pageUrl.pathname === '/RecipeFinder/register.html') {
+    return LOCAL_CALLBACK_URL;
+  }
+  if (pageUrl.protocol === 'https:') {
+    return new URL('/auth-callback.html', pageUrl.origin).href;
+  }
+  throw new TypeError('The registration callback URL is not approved.');
+}
+
+function isApprovedCallbackUrl(callbackUrl, applicationOrigin) {
+  if (callbackUrl === LOCAL_CALLBACK_URL) return true;
+  const approvedOrigin = parseOrigin(applicationOrigin);
+  if (!approvedOrigin?.startsWith('https://')) return false;
+  try {
+    const callback = new URL(callbackUrl);
+    return callback.origin === approvedOrigin
+      && callback.pathname === '/auth-callback.html'
+      && !callback.username
+      && !callback.password
+      && !callback.search
+      && !callback.hash;
+  } catch {
+    return false;
+  }
+}
+
+export function createRegistrationService(
+  client,
+  { callbackUrl = LOCAL_CALLBACK_URL, applicationOrigin } = {}
+) {
   if (
     !client?.auth
     || typeof client.auth.signUp !== 'function'
@@ -81,7 +133,7 @@ export function createRegistrationService(client, { callbackUrl = CALLBACK_URL }
   ) {
     throw new TypeError('A Supabase-compatible Auth client is required.');
   }
-  if (callbackUrl !== CALLBACK_URL) {
+  if (!isApprovedCallbackUrl(callbackUrl, applicationOrigin)) {
     throw new TypeError('The registration callback URL is not approved.');
   }
 

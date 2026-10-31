@@ -5,7 +5,11 @@ import {
   SUPABASE_UMD_URL,
   SupabaseConfigurationError,
 } from './supabase-client.js';
-import { createRegistrationService } from './registration.js';
+import {
+  REGISTRATION_MESSAGES,
+  createRegistrationService,
+  resolveRegistrationCallbackUrl,
+} from './registration.js';
 import {
   activateRegistrationSubmitController,
   createRegistrationSubmitController,
@@ -342,4 +346,137 @@ export function createRegistrationPageInitialization(options = {}) {
 
 export async function loadLocalPublicConfig() {
   return import('./supabase-config.js');
+}
+
+const REGISTRATION_LOADING_MESSAGE = 'Preparing secure account registration.';
+
+function setRegistrationReadiness(documentLike, { available, busy, message = '', isError = false }) {
+  try {
+    const form = documentLike?.querySelector?.('[data-auth-form="register"]');
+    const submit = form?.querySelector?.('[type="submit"]');
+    const status = form?.querySelector?.('[data-form-status]');
+    if (submit) submit.disabled = !available;
+    form?.setAttribute?.('aria-busy', String(busy));
+    if (status) {
+      status.textContent = message;
+      status.classList?.toggle?.('is-error', isError);
+    }
+  } catch {
+    // Page readiness failures must not expose dependency details.
+  }
+}
+
+export function createLiveRegistrationPageActivation(options = {}) {
+  let loadConfig;
+  let sdk;
+  let root;
+  let documentLike;
+  let location;
+  let createPageInitialization;
+  try {
+    loadConfig = options?.loadConfig;
+    sdk = options?.sdk;
+    root = options?.root;
+    documentLike = options?.document;
+    location = options?.location;
+    createPageInitialization = options?.createPageInitialization;
+  } catch {
+    throw registrationClientInitializationFailure();
+  }
+  if (loadConfig === undefined) loadConfig = loadLocalPublicConfig;
+  if (sdk === undefined) sdk = globalThis.supabase;
+  if (root === undefined) root = globalThis.document?.documentElement;
+  if (documentLike === undefined) documentLike = globalThis.document;
+  if (location === undefined) location = globalThis.location;
+  if (createPageInitialization === undefined) createPageInitialization = createRegistrationPageInitialization;
+
+  let activationPromise;
+  let pageInitialization;
+  let composition;
+  let generation = 0;
+  let retired = false;
+
+  return Object.freeze({
+    activate() {
+      if (retired) return Promise.resolve(false);
+      if (!activationPromise) {
+        const activationGeneration = ++generation;
+        const attempt = (async () => {
+          let activated = false;
+          setRegistrationReadiness(documentLike, {
+            available: false,
+            busy: true,
+            message: REGISTRATION_LOADING_MESSAGE,
+          });
+          try {
+            if (!pageInitialization) {
+              pageInitialization = createPageInitialization({ loadConfig, sdk, root });
+            }
+            if (await pageInitialization.initialize() !== REGISTRATION_CLIENT_STATE.READY) return false;
+            if (retired || activationGeneration !== generation) return false;
+
+            const callbackUrl = resolveRegistrationCallbackUrl(location);
+            const applicationOrigin = new URL(callbackUrl).origin;
+            composition = pageInitialization.createComposition({
+              createService(client) {
+                return createRegistrationService(client, { callbackUrl, applicationOrigin });
+              },
+            });
+            if (retired || activationGeneration !== generation) return false;
+            activated = composition?.activate?.() === true;
+            if (retired || activationGeneration !== generation) {
+              try { composition?.cleanup?.(); } catch { /* Retired work stays private. */ }
+              return false;
+            }
+            setRegistrationReadiness(documentLike, {
+              available: activated,
+              busy: false,
+              message: activated ? '' : REGISTRATION_MESSAGES.UNAVAILABLE,
+              isError: !activated,
+            });
+            return activated;
+          } catch {
+            return false;
+          } finally {
+            if (!retired && activationGeneration === generation && !activated) {
+              setRegistrationReadiness(documentLike, {
+                available: false,
+                busy: false,
+                message: REGISTRATION_MESSAGES.UNAVAILABLE,
+                isError: true,
+              });
+            }
+          }
+        })();
+        activationPromise = attempt;
+        void attempt.then((activated) => {
+          if (!activated && activationPromise === attempt) activationPromise = null;
+        });
+      }
+      return activationPromise;
+    },
+
+    cleanup() {
+      if (retired) return false;
+      retired = true;
+      generation += 1;
+      setRegistrationReadiness(documentLike, {
+        available: false,
+        busy: false,
+        message: REGISTRATION_MESSAGES.UNAVAILABLE,
+        isError: true,
+      });
+      try {
+        composition?.cleanup?.();
+      } catch {
+        // The lifecycle is retired even if controller cleanup fails.
+      }
+      return true;
+    },
+  });
+}
+
+if (typeof document !== 'undefined') {
+  const liveRegistration = createLiveRegistrationPageActivation();
+  void liveRegistration.activate();
 }

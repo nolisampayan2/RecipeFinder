@@ -11,6 +11,7 @@ import {
   CALLBACK_CLIENT_STATE,
   createCallbackConfirmationComposition,
   createCallbackPageInitialization,
+  createLiveCallbackPageActivation,
   createManualLoginConfirmationOrchestration,
 } from '../js/auth-callback-browser.js';
 
@@ -641,6 +642,89 @@ assert.deepEqual(await missingDependencyComposition.activate(), {
 });
 assert.equal(missingDependencyClientCalls, 0, 'Missing UI dependencies must fail before client initialization');
 
+let liveCallbackInitializations = 0;
+let liveCallbackActivations = 0;
+const liveCallback = createLiveCallbackPageActivation({
+  root: {},
+  pageInitialization: {
+    async initialize() { liveCallbackInitializations += 1; return CALLBACK_CLIENT_STATE.READY; },
+    createConfirmationComposition() {
+      return {
+        async activate() {
+          liveCallbackActivations += 1;
+          return { status: CONFIRMATION_STATUS.CONFIRMED, message: CONFIRMATION_MESSAGES.CONFIRMED };
+        },
+        cleanup() { return true; },
+      };
+    },
+  },
+});
+assert.deepEqual(await liveCallback.activate(), {
+  status: CONFIRMATION_STATUS.CONFIRMED,
+  message: CONFIRMATION_MESSAGES.CONFIRMED,
+});
+assert.deepEqual(await liveCallback.activate(), {
+  status: CONFIRMATION_STATUS.CONFIRMED,
+  message: CONFIRMATION_MESSAGES.CONFIRMED,
+});
+assert.equal(liveCallbackInitializations, 1);
+assert.equal(liveCallbackActivations, 1, 'Live callback activation must exchange at most once');
+assert.equal(liveCallback.cleanup(), true);
+assert.equal(liveCallback.cleanup(), false);
+
+let blockedCompositionCalls = 0;
+const blockedLiveCallback = createLiveCallbackPageActivation({
+  root: {},
+  pageInitialization: {
+    initialize: async () => CALLBACK_CLIENT_STATE.UNAVAILABLE,
+    createConfirmationComposition() { blockedCompositionCalls += 1; },
+  },
+});
+assert.equal((await blockedLiveCallback.activate()).status, CONFIRMATION_STATUS.UNAVAILABLE);
+assert.equal(blockedCompositionCalls, 0, 'Failed readiness must block callback exchange composition');
+let callbackReadinessAttempts = 0;
+let callbackRetryActivations = 0;
+const retryingLiveCallback = createLiveCallbackPageActivation({
+  root: {},
+  pageInitialization: {
+    async initialize() {
+      callbackReadinessAttempts += 1;
+      return callbackReadinessAttempts === 1
+        ? CALLBACK_CLIENT_STATE.UNAVAILABLE
+        : CALLBACK_CLIENT_STATE.READY;
+    },
+    createConfirmationComposition() {
+      return {
+        async activate() {
+          callbackRetryActivations += 1;
+          return { status: CONFIRMATION_STATUS.CONFIRMED, message: CONFIRMATION_MESSAGES.CONFIRMED };
+        },
+      };
+    },
+  },
+});
+assert.equal((await retryingLiveCallback.activate()).status, CONFIRMATION_STATUS.UNAVAILABLE);
+assert.equal((await retryingLiveCallback.activate()).status, CONFIRMATION_STATUS.CONFIRMED);
+assert.equal(callbackReadinessAttempts, 2);
+assert.equal(callbackRetryActivations, 1, 'Only successful readiness may activate exchange');
+
+for (const hostileCallbackOptions of [
+  Object.defineProperty({}, 'pageInitialization', {
+    get() { throw Object.assign(new Error('PRIVATE_CALLBACK_OPTION'), { cause: 'PRIVATE_CAUSE', custom: 'PRIVATE_CUSTOM' }); },
+  }),
+  new Proxy({}, { get() { throw new Error('PRIVATE_CALLBACK_PROXY'); } }),
+]) {
+  const containedCallback = createLiveCallbackPageActivation(hostileCallbackOptions);
+  assert.deepEqual(await containedCallback.activate(), {
+    status: CONFIRMATION_STATUS.UNAVAILABLE,
+    message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+  });
+  assert.equal(JSON.stringify(await containedCallback.activate()).includes('PRIVATE'), false);
+}
+assert.doesNotThrow(() => createLiveCallbackPageActivation(new Proxy({}, {
+  ownKeys() { throw new Error('PRIVATE_CALLBACK_KEYS'); },
+})));
+
 const adapterSource = await readFile(new URL('../js/auth-callback-exchange.js', import.meta.url), 'utf8');
 assert.doesNotMatch(adapterSource, /console\.|localStorage|sessionStorage|\bfetch\s*\(|XMLHttpRequest|WebSocket/);
 assert.doesNotMatch(adapterSource, /supabase-config|createClient|getSession|onAuthStateChange|verifyOtp|signUp|signInWithPassword/);
@@ -657,22 +741,17 @@ const callbackBrowserSource = await readFile(new URL('../js/auth-callback-browse
 assert.equal(
   callbackBrowserSource.match(/createManualLoginConfirmationOrchestration\s*\(/g)?.length,
   1,
-  'The manual-login orchestration must be declared but never invoked by page load'
+  'The manual-login orchestration must remain centralized'
 );
 assert.equal(
   callbackBrowserSource.match(/createCallbackConfirmationComposition\s*\(/g)?.length,
   2,
-  'The callback lifecycle composition may be created explicitly but must never be invoked by page load'
+  'The callback lifecycle composition must remain centralized'
 );
 assert.match(
   callbackBrowserSource,
-  /const pageInitialization = createCallbackPageInitialization[\s\S]*void pageInitialization\.initialize\(\);/,
-  'The live page entrypoint must invoke readiness only'
-);
-assert.doesNotMatch(
-  callbackBrowserSource,
-  /pageInitialization\.createConfirmationComposition\s*\(/,
-  'The live page entrypoint must not create the exchange composition'
+  /const liveCallback = createLiveCallbackPageActivation[\s\S]*void liveCallback\.activate\(\);/,
+  'The live page entrypoint must activate the readiness-gated callback lifecycle'
 );
 
 const combinedSafeOutput = JSON.stringify({

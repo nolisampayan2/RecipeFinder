@@ -50,9 +50,9 @@
           <div class="form-options">
             <label class="check"><input type="checkbox" name="remember" value="yes"> Remember me <span class="sr-only">(visual only)</span></label>
           </div>
-          <button class="auth-submit" type="submit">Sign in</button>
+          <button class="auth-submit" type="submit" disabled>Sign in</button>
           <p class="form-status" data-form-status role="status" aria-live="polite"></p>
-          <p class="prototype-note">Authentication is not connected yet. This form never sends or stores your credentials.</p>
+          <p class="prototype-note">Email confirmation is required. Remember Me is visual only and does not change session behavior yet.</p>
         </form>
 
         <p class="auth-switch">New to RecipeFinder? <a href="register.html">Create an account</a></p>
@@ -60,6 +60,8 @@
       </section>
     </main>
   </div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script type="module" src="js/auth-ui.js"></script>
+  <script type="module" src="js/login-browser.js"></script>
 </body>
 </html>

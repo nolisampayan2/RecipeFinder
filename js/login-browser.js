@@ -1,4 +1,4 @@
-import { createLoginService } from './login.js';
+import { LOGIN_MESSAGES, LOGIN_STATUS, createLoginService } from './login.js';
 import { createSupabasePageClientOwner } from './supabase-browser.js';
 import {
   SUPABASE_CLIENT_PROFILE,
@@ -190,4 +190,155 @@ export function createLoginControllerActivation({
       return removed;
     },
   });
+}
+
+async function loadLocalPublicConfig() {
+  return import('./supabase-config.js');
+}
+
+const LOGIN_LOADING_MESSAGE = 'Preparing secure sign-in.';
+
+function setLoginReadiness(documentLike, { available, busy, message = '', isError = false }) {
+  try {
+    const form = documentLike?.querySelector?.('[data-auth-form="login"]');
+    const submit = form?.querySelector?.('[type="submit"]');
+    const status = form?.querySelector?.('[data-form-status]');
+    if (submit) submit.disabled = !available;
+    form?.setAttribute?.('aria-busy', String(busy));
+    if (status) {
+      status.textContent = message;
+      status.classList?.toggle?.('is-error', isError);
+    }
+  } catch {
+    // Page readiness failures must not expose dependency details.
+  }
+}
+
+export function createLiveLoginPageActivation(options = {}) {
+  let loadConfig;
+  let sdk;
+  let documentLike;
+  let navigate;
+  let createPageComposition;
+  try {
+    loadConfig = options?.loadConfig;
+    sdk = options?.sdk;
+    documentLike = options?.document;
+    navigate = options?.navigate;
+    createPageComposition = options?.createPageComposition;
+  } catch {
+    throw loginClientInitializationFailure();
+  }
+  if (loadConfig === undefined) loadConfig = loadLocalPublicConfig;
+  if (sdk === undefined) sdk = globalThis.supabase;
+  if (documentLike === undefined) documentLike = globalThis.document;
+  if (navigate === undefined) navigate = () => globalThis.location?.assign?.('index.html');
+  if (createPageComposition === undefined) createPageComposition = createLoginPageComposition;
+
+  let activationPromise;
+  let pageComposition;
+  let controllerActivation;
+  let generation = 0;
+  let retired = false;
+
+  return Object.freeze({
+    activate() {
+      if (retired) return Promise.resolve(false);
+      if (!activationPromise) {
+        const activationGeneration = ++generation;
+        const attempt = (async () => {
+          let activated = false;
+          setLoginReadiness(documentLike, {
+            available: false,
+            busy: true,
+            message: LOGIN_LOADING_MESSAGE,
+          });
+          try {
+            if (typeof loadConfig !== 'function' || typeof createPageComposition !== 'function') return false;
+            if (!pageComposition) {
+              const configModule = await loadConfig();
+              if (retired || activationGeneration !== generation) return false;
+              pageComposition = createPageComposition({
+                clientDependencies: { config: configModule?.SUPABASE_CONFIG, sdk },
+              });
+            }
+            if (retired || activationGeneration !== generation) return false;
+            if (!controllerActivation) {
+              controllerActivation = pageComposition.prepareController({
+                createService(client) {
+                  const service = createLoginService(client);
+                  return Object.freeze({
+                    async submit(input) {
+                      const submissionGeneration = generation;
+                      const result = await service.submit(input);
+                      if (
+                        result?.status === LOGIN_STATUS.AUTHENTICATED
+                        && !retired
+                        && submissionGeneration === generation
+                      ) {
+                        try { navigate('index.html'); } catch { /* Navigation remains best-effort. */ }
+                      }
+                      return result;
+                    },
+                  });
+                },
+              });
+            }
+            if (retired || activationGeneration !== generation) return false;
+            activated = controllerActivation?.activate?.() === true;
+            if (retired || activationGeneration !== generation) {
+              try { controllerActivation?.cleanup?.(); } catch { /* Retired work stays private. */ }
+              return false;
+            }
+            setLoginReadiness(documentLike, {
+              available: activated,
+              busy: false,
+              message: activated ? '' : LOGIN_MESSAGES.UNAVAILABLE,
+              isError: !activated,
+            });
+            return activated;
+          } catch {
+            return false;
+          } finally {
+            if (!retired && activationGeneration === generation && !activated) {
+              setLoginReadiness(documentLike, {
+                available: false,
+                busy: false,
+                message: LOGIN_MESSAGES.UNAVAILABLE,
+                isError: true,
+              });
+            }
+          }
+        })();
+        activationPromise = attempt;
+        void attempt.then((activated) => {
+          if (!activated && activationPromise === attempt) activationPromise = null;
+        });
+      }
+      return activationPromise;
+    },
+
+    cleanup() {
+      if (retired) return false;
+      retired = true;
+      generation += 1;
+      setLoginReadiness(documentLike, {
+        available: false,
+        busy: false,
+        message: LOGIN_MESSAGES.UNAVAILABLE,
+        isError: true,
+      });
+      try {
+        controllerActivation?.cleanup?.();
+      } catch {
+        // The lifecycle is retired even if controller cleanup fails.
+      }
+      return true;
+    },
+  });
+}
+
+if (typeof document !== 'undefined') {
+  const liveLogin = createLiveLoginPageActivation();
+  void liveLogin.activate();
 }

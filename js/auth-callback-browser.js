@@ -265,6 +265,66 @@ export function createCallbackPageInitialization({ loadConfig, sdk, root } = {})
   });
 }
 
+function unavailableLiveCallbackActivation() {
+  return Object.freeze({
+    activate: () => Promise.resolve(unavailableConfirmation()),
+    cleanup: () => false,
+  });
+}
+
+export function createLiveCallbackPageActivation(options = {}) {
+  let pageInitialization;
+  let createPageInitialization;
+  let loadConfig;
+  let sdk;
+  let root;
+  try {
+    pageInitialization = options?.pageInitialization;
+    createPageInitialization = options?.createPageInitialization;
+    loadConfig = options?.loadConfig;
+    sdk = options?.sdk;
+    root = options?.root;
+  } catch {
+    return unavailableLiveCallbackActivation();
+  }
+  if (createPageInitialization === undefined) createPageInitialization = createCallbackPageInitialization;
+
+  let activationPromise;
+  let composition;
+  let cleanedUp = false;
+  let readinessFailed = false;
+
+  return Object.freeze({
+    activate() {
+      if (!activationPromise) {
+        const attempt = (async () => {
+          if (cleanedUp) return unavailableConfirmation();
+          const page = pageInitialization || createPageInitialization({ loadConfig, sdk, root });
+          if (await page.initialize() !== CALLBACK_CLIENT_STATE.READY || cleanedUp) {
+            readinessFailed = !cleanedUp;
+            return unavailableConfirmation();
+          }
+          readinessFailed = false;
+          composition = page.createConfirmationComposition({ root });
+          return normalizeConfirmation(await composition?.activate?.());
+        })().catch(() => unavailableConfirmation());
+        activationPromise = attempt;
+        void attempt.then(() => {
+          if (readinessFailed && activationPromise === attempt) activationPromise = null;
+        });
+      }
+      return activationPromise;
+    },
+
+    cleanup() {
+      if (cleanedUp) return false;
+      cleanedUp = true;
+      try { composition?.cleanup?.(); } catch { /* Provider and UI failures remain private. */ }
+      return true;
+    },
+  });
+}
+
 async function loadLocalPublicConfig() {
   return import('./supabase-config.js');
 }
@@ -275,5 +335,9 @@ if (typeof document !== 'undefined') {
     sdk: globalThis.supabase,
     root: document.documentElement,
   });
-  void pageInitialization.initialize();
+  const liveCallback = createLiveCallbackPageActivation({
+    pageInitialization,
+    root: document,
+  });
+  void liveCallback.activate();
 }
