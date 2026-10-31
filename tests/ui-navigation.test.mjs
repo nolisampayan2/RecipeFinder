@@ -126,7 +126,10 @@ const navigation = app.match(/function initializeNavigation\(\)[\s\S]*?\n\}/)?.[
 assert.match(navigation, /setActiveNavigation\('home'\)/);
 assert.match(navigation, /setActiveNavigation\(link\.dataset\.section\)/);
 assert.equal((navigation.match(/link\.addEventListener\('click'/g) || []).length, 1, 'Navigation links must have one click listener');
-assert.match(navigation, /section === 'home' \|\| link\.dataset\.section === 'recommended'[\s\S]*?restoreDiscoveryCollection\(\)/);
+assert.match(navigation, /section === 'home'[\s\S]*?event\.preventDefault\(\)[\s\S]*?restoreDiscoveryCollection\(\)/);
+assert.match(navigation, /\$\('\.page'\)\?\.scrollIntoView\(\{ behavior: 'smooth', block: 'start' \}\)/);
+assert.match(navigation, /window\.location\.hash !== '#home'[\s\S]*?window\.history\.replaceState\(null, '', '#home'\)/);
+assert.match(navigation, /section === 'recommended'[\s\S]*?restoreDiscoveryCollection\(\)/);
 assert.match(navigation, /section === 'categories' \|\| link\.dataset\.section === 'cuisines'[\s\S]*?restoreDiscoveryCollection\(\)/);
 assert.match(navigation, /section === 'favorites'[\s\S]*?showRecipeCollection\('favorites'\)/);
 assert.match(navigation, /closeMobileSidebar\(\{ restoreFocus: true \}\)/);
@@ -134,7 +137,7 @@ assert.match(navigation, /event\.key === 'Escape'[\s\S]*?closeMobileSidebar\(\{ 
 assert.match(navigation, /mobileSidebarQuery\.addEventListener\('change'/);
 assert.match(navigation, /if \(!event\.matches\) setSidebarOpen\(false\)/);
 
-assert.doesNotMatch(app, /location\.hash|history\.(?:pushState|replaceState)|addEventListener\(['"](?:hashchange|popstate)/);
+assert.doesNotMatch(app, /window\.scrollTo|history\.pushState|addEventListener\(['"](?:hashchange|popstate)/);
 
 assert.doesNotMatch(app, /innerHTML\s*=|insertAdjacentHTML|document\.write/);
 assert.doesNotMatch(app, /fetch\s*\(|XMLHttpRequest|WebSocket|signUp|signIn|exchangeCodeForSession/);

@@ -412,7 +412,14 @@ function initializeNavigation() {
     link.addEventListener('click', (event) => {
       setActiveNavigation(link.dataset.section);
       closeMobileSidebar({ restoreFocus: true });
-      if (link.dataset.section === 'home' || link.dataset.section === 'recommended') {
+      if (link.dataset.section === 'home') {
+        event.preventDefault();
+        restoreDiscoveryCollection();
+        $('.page')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (window.location.hash !== '#home') {
+          window.history.replaceState(null, '', '#home');
+        }
+      } else if (link.dataset.section === 'recommended') {
         restoreDiscoveryCollection();
       } else if (link.dataset.section === 'categories' || link.dataset.section === 'cuisines') {
         restoreDiscoveryCollection();
