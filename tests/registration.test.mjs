@@ -19,6 +19,11 @@ import {
   createRegistrationSubmitController,
   deactivateRegistrationSubmitController,
 } from '../js/auth-ui.js';
+import {
+  SUPABASE_CLIENT_PROFILE,
+  SupabaseConfigurationError,
+  getSupabaseClientOptions,
+} from '../js/supabase-client.js';
 
 assert.equal(typeof createRegistrationClientActivation, 'function', 'The inert browser import seam must resolve');
 
@@ -79,6 +84,7 @@ assert.equal(controllerActivation.activate(), true, 'Controller activation must 
 assert.equal(typeof installedController?.submit, 'function');
 assert.equal(preparedSubmitCalls, 0, 'Explicit activation must not submit registration');
 assert.equal(controllerModule.createRegistrationControllerActivation({}).activate(), false);
+assert.equal(createRegistrationControllerActivation({ createController: null }).activate(), false);
 
 let compositionClientInitializations = 0;
 let compositionSignUpCalls = 0;
@@ -119,6 +125,7 @@ assert.equal(compositionSignUpCalls, 0, 'Activation alone must not call signUp')
 assert.equal(composition.cleanup(), true);
 assert.equal(composition.cleanup(), false, 'Composition cleanup must be idempotent');
 assert.equal(createRegistrationComposition({}).activate(), false, 'Missing composition dependencies must fail closed');
+assert.equal(createRegistrationComposition({ createClientActivation: null }).activate(), false);
 assert.equal(createRegistrationComposition({
   createClientActivation() { throw new Error('offline initializer fixture'); },
 }).activate(), false, 'Synchronous dependency failures must remain contained');
@@ -140,6 +147,26 @@ assert.equal(await firstPageInitialization, REGISTRATION_CLIENT_STATE.READY);
 assert.equal(configLoads, 1, 'The ignored configuration module must be requested once per page context');
 assert.equal(browserClientCreations, 2, 'Simulated page activation must construct exactly one additional client');
 assert.equal(readinessRoot.dataset.supabaseClientState, REGISTRATION_CLIENT_STATE.READY);
+
+let sharedCompositionClient;
+let sharedCompositionInstalls = 0;
+const sharedPageComposition = pageInitialization.createComposition({
+  clientActivation: { activate() { throw new Error('must be replaced by the page owner'); } },
+  createService(client) {
+    sharedCompositionClient = client;
+    return { submit: async () => ({ status: REGISTRATION_STATUS.UNAVAILABLE }) };
+  },
+  installController() {
+    sharedCompositionInstalls += 1;
+    return true;
+  },
+  removeController: () => true,
+});
+assert.equal(sharedPageComposition.activate(), true);
+assert.equal(sharedCompositionClient, offlineBrowserClient, 'Readiness and controller composition must share one client');
+assert.equal(sharedCompositionInstalls, 1);
+assert.equal(browserClientCreations, 2, 'Preparing the controller must not construct a second page client');
+assert.equal(sharedPageComposition.cleanup(), true);
 
 for (const unavailableCase of [
   {
@@ -164,6 +191,291 @@ for (const unavailableCase of [
   assert.equal(root.dataset.supabaseClientState, REGISTRATION_CLIENT_STATE.UNAVAILABLE, unavailableCase.name);
 }
 assert.equal(browserClientCreations, 2, 'Failed page initialization must not reach the SDK');
+
+const INITIALIZATION_FAILURE = 'Supabase client initialization failed.';
+function assertSanitizedRegistrationFailure(operation, privatePattern) {
+  assert.throws(
+    operation,
+    (error) => error.message === INITIALIZATION_FAILURE && !privatePattern.test(error.message)
+  );
+}
+
+let gatedClientCreations = 0;
+let gatedClientSeen;
+const gatedClient = Object.freeze({ auth: Object.freeze({}) });
+const gatedPage = createRegistrationPageInitialization({
+  loadConfig: async () => ({ SUPABASE_CONFIG: offlinePublicConfig }),
+  sdk: {
+    createClient(url, key, options) {
+      gatedClientCreations += 1;
+      assert.equal(url, offlinePublicConfig.url);
+      assert.equal(key, offlinePublicConfig.publishableKey);
+      assert.deepEqual(options, getSupabaseClientOptions(SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION));
+      return gatedClient;
+    },
+  },
+  root: { dataset: {} },
+});
+const gatedComposition = gatedPage.createComposition({
+  createService(client) {
+    gatedClientSeen = client;
+    return { submit: async () => ({ status: REGISTRATION_STATUS.UNAVAILABLE }) };
+  },
+  installController: () => true,
+  removeController: () => true,
+});
+assert.equal(gatedComposition.activate(), false, 'Composition must fail closed before readiness succeeds');
+assert.equal(gatedClientCreations, 0);
+assert.equal(await gatedPage.initialize(), REGISTRATION_CLIENT_STATE.READY);
+assert.equal(gatedComposition.activate(), true, 'The same prepared composition may activate after readiness');
+assert.equal(gatedClientSeen, gatedClient);
+assert.equal(gatedClientCreations, 1);
+assert.equal(gatedComposition.cleanup(), true);
+
+let transientReadinessAttempts = 0;
+const transientReadinessClient = Object.freeze({ auth: Object.freeze({}) });
+const transientReadinessPage = createRegistrationPageInitialization({
+  loadConfig: async () => ({ SUPABASE_CONFIG: offlinePublicConfig }),
+  sdk: {
+    createClient() {
+      transientReadinessAttempts += 1;
+      if (transientReadinessAttempts === 1) throw new Error('PRIVATE_TRANSIENT_READINESS');
+      return transientReadinessClient;
+    },
+  },
+  root: { dataset: {} },
+});
+assert.equal(await transientReadinessPage.initialize(), REGISTRATION_CLIENT_STATE.UNAVAILABLE);
+const retryComposition = transientReadinessPage.createComposition({
+  createService(client) {
+    assert.equal(client, transientReadinessClient);
+    return { submit: async () => ({ status: REGISTRATION_STATUS.UNAVAILABLE }) };
+  },
+  installController: () => true,
+});
+assert.equal(retryComposition.activate(), false, 'Failed readiness must not authorize composition');
+assert.equal(await transientReadinessPage.initialize(), REGISTRATION_CLIENT_STATE.READY);
+assert.equal(retryComposition.activate(), true);
+assert.equal(transientReadinessAttempts, 2, 'Only explicit readiness retry may reconstruct the client');
+
+let reentrantActivation;
+let reentrantConstructions = 0;
+let reentrantError = '';
+const reentrantRegistrationClient = Object.freeze({ auth: Object.freeze({}) });
+reentrantActivation = createRegistrationClientActivation({
+  config: offlinePublicConfig,
+  sdk: {
+    createClient() {
+      reentrantConstructions += 1;
+      try {
+        reentrantActivation.activate();
+      } catch (error) {
+        reentrantError = error.message;
+      }
+      return reentrantRegistrationClient;
+    },
+  },
+  profile: SUPABASE_CLIENT_PROFILE.FOUNDATION,
+});
+assert.equal(reentrantActivation.profile, SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION);
+assert.equal(reentrantActivation.activate(), reentrantRegistrationClient);
+assert.match(reentrantError, /already in progress/i);
+assert.equal(reentrantConstructions, 1);
+assert.equal(reentrantActivation.activate(), reentrantRegistrationClient);
+
+let isolatedConstructions = 0;
+const isolatedSdk = {
+  createClient() {
+    isolatedConstructions += 1;
+    return Object.freeze({ page: isolatedConstructions, auth: Object.freeze({}) });
+  },
+};
+const isolatedA = createRegistrationClientActivation({ config: offlinePublicConfig, sdk: isolatedSdk });
+const isolatedB = createRegistrationClientActivation({ config: offlinePublicConfig, sdk: isolatedSdk });
+assert.notEqual(isolatedA.activate(), isolatedB.activate());
+assert.equal(isolatedConstructions, 2);
+
+for (const [name, candidate] of [
+  ['empty', {}],
+  ['array', []],
+  ['resolved promise', Promise.resolve(offlineBrowserClient)],
+]) {
+  const malformedPage = createRegistrationPageInitialization({
+    loadConfig: async () => ({ SUPABASE_CONFIG: offlinePublicConfig }),
+    sdk: { createClient: () => candidate },
+    root: { dataset: {} },
+  });
+  assert.equal(await malformedPage.initialize(), REGISTRATION_CLIENT_STATE.UNAVAILABLE, name);
+}
+
+const unhandledRegistrationRejections = [];
+const captureRegistrationRejection = (reason) => unhandledRegistrationRejections.push(reason);
+process.on('unhandledRejection', captureRegistrationRejection);
+const rejectedRegistrationClient = Promise.reject(new Error('PRIVATE_REJECTED_REGISTRATION_CLIENT'));
+const rejectedRegistrationPage = createRegistrationPageInitialization({
+  loadConfig: async () => ({ SUPABASE_CONFIG: offlinePublicConfig }),
+  sdk: { createClient: () => rejectedRegistrationClient },
+  root: { dataset: {} },
+});
+assert.equal(await rejectedRegistrationPage.initialize(), REGISTRATION_CLIENT_STATE.UNAVAILABLE);
+await new Promise((resolve) => setImmediate(resolve));
+process.removeListener('unhandledRejection', captureRegistrationRejection);
+assert.deepEqual(unhandledRegistrationRejections, []);
+
+let customThenCalls = 0;
+const thenableRegistrationPage = createRegistrationPageInitialization({
+  loadConfig: async () => ({ SUPABASE_CONFIG: offlinePublicConfig }),
+  sdk: {
+    createClient: () => ({
+      auth: {},
+      then() { customThenCalls += 1; },
+    }),
+  },
+  root: { dataset: {} },
+});
+assert.equal(await thenableRegistrationPage.initialize(), REGISTRATION_CLIENT_STATE.UNAVAILABLE);
+assert.equal(customThenCalls, 0);
+
+for (const property of ['config', 'sdk', 'owner', 'createClientOwner']) {
+  const options = {};
+  Object.defineProperty(options, property, {
+    get() { throw new Error(`PRIVATE_REGISTRATION_${property.toUpperCase()}`); },
+  });
+  assertSanitizedRegistrationFailure(
+    () => createRegistrationClientActivation(options),
+    new RegExp(`PRIVATE_REGISTRATION_${property.toUpperCase()}`)
+  );
+}
+assertSanitizedRegistrationFailure(
+  () => createRegistrationClientActivation(new Proxy({}, {
+    get() { throw new Error('PRIVATE_REGISTRATION_OPTIONS_PROXY'); },
+  })),
+  /PRIVATE_REGISTRATION_OPTIONS_PROXY/
+);
+
+for (const property of ['loadConfig', 'sdk', 'root', 'createClientActivation', 'createComposition']) {
+  const options = {};
+  Object.defineProperty(options, property, {
+    get() { throw new Error(`PRIVATE_REGISTRATION_PAGE_${property.toUpperCase()}`); },
+  });
+  assertSanitizedRegistrationFailure(
+    () => createRegistrationPageInitialization(options),
+    new RegExp(`PRIVATE_REGISTRATION_PAGE_${property.toUpperCase()}`)
+  );
+}
+assertSanitizedRegistrationFailure(
+  () => createRegistrationPageInitialization(new Proxy({}, {
+    get() { throw new Error('PRIVATE_REGISTRATION_PAGE_PROXY'); },
+  })),
+  /PRIVATE_REGISTRATION_PAGE_PROXY/
+);
+
+for (const root of [
+  Object.defineProperty({}, 'dataset', {
+    get() { throw new Error('PRIVATE_REGISTRATION_ROOT_DATASET'); },
+  }),
+  { dataset: new Proxy({}, {
+    set() { throw new Error('PRIVATE_REGISTRATION_ROOT_SETTER'); },
+  }) },
+]) {
+  const rootBoundaryPage = createRegistrationPageInitialization({
+    loadConfig: async () => ({ SUPABASE_CONFIG: offlinePublicConfig }),
+    sdk: offlineSdk,
+    root,
+  });
+  assert.equal(await rootBoundaryPage.initialize(), REGISTRATION_CLIENT_STATE.READY);
+}
+
+const nullFactoryPage = createRegistrationPageInitialization({
+  loadConfig: async () => ({ SUPABASE_CONFIG: offlinePublicConfig }),
+  sdk: offlineSdk,
+  createClientActivation: null,
+});
+assert.equal(await nullFactoryPage.initialize(), REGISTRATION_CLIENT_STATE.UNAVAILABLE);
+
+assertSanitizedRegistrationFailure(
+  () => createRegistrationClientActivation({
+    createClientOwner() { throw new Error('PRIVATE_REGISTRATION_OWNER_FACTORY'); },
+  }).activate(),
+  /PRIVATE_REGISTRATION_OWNER_FACTORY/
+);
+assertSanitizedRegistrationFailure(
+  () => createRegistrationClientActivation({
+    owner: { initialize() { throw new SupabaseConfigurationError('PRIVATE_REGISTRATION_OWNER'); } },
+  }).activate(),
+  /PRIVATE_REGISTRATION_OWNER/
+);
+
+let selfThrowingRegistrationProxy;
+selfThrowingRegistrationProxy = new Proxy(new Error('PRIVATE_REGISTRATION_PROXY'), {
+  getPrototypeOf() { throw selfThrowingRegistrationProxy; },
+});
+assertSanitizedRegistrationFailure(
+  () => createRegistrationClientActivation({
+    owner: { initialize() { throw selfThrowingRegistrationProxy; } },
+  }).activate(),
+  /PRIVATE_REGISTRATION_PROXY/
+);
+
+for (const [property, marker, thrownError] of [
+  ['url', 'PRIVATE_REGISTRATION_URL', new SupabaseConfigurationError('PRIVATE_REGISTRATION_URL')],
+  ['publishableKey', 'PRIVATE_REGISTRATION_KEY', new SupabaseConfigurationError('PRIVATE_REGISTRATION_KEY')],
+  ['url', 'PRIVATE_REGISTRATION_ORDINARY', new Error('PRIVATE_REGISTRATION_ORDINARY')],
+]) {
+  const hostileConfig = { ...offlinePublicConfig };
+  Object.defineProperty(hostileConfig, property, { get() { throw thrownError; } });
+  assertSanitizedRegistrationFailure(
+    () => createRegistrationClientActivation({ config: hostileConfig, sdk: offlineSdk }).activate(),
+    new RegExp(marker)
+  );
+}
+
+const hostileRegistrationMessage = new SupabaseConfigurationError('PRIVATE_REGISTRATION_MESSAGE');
+Object.defineProperty(hostileRegistrationMessage, 'message', {
+  get() { throw new Error('PRIVATE_REGISTRATION_MESSAGE_GETTER'); },
+});
+const hostileMessageConfig = { publishableKey: offlinePublicConfig.publishableKey };
+Object.defineProperty(hostileMessageConfig, 'url', {
+  get() { throw hostileRegistrationMessage; },
+});
+assertSanitizedRegistrationFailure(
+  () => createRegistrationClientActivation({ config: hostileMessageConfig, sdk: offlineSdk }).activate(),
+  /PRIVATE_REGISTRATION_MESSAGE|PRIVATE_REGISTRATION_MESSAGE_GETTER/
+);
+
+const hostileRegistrationPrototype = new Proxy(
+  new SupabaseConfigurationError('PRIVATE_REGISTRATION_PROTOTYPE'),
+  { getPrototypeOf() { throw new Error('PRIVATE_REGISTRATION_PROTOTYPE_TRAP'); } }
+);
+const hostilePrototypeConfig = { publishableKey: offlinePublicConfig.publishableKey };
+Object.defineProperty(hostilePrototypeConfig, 'url', {
+  get() { throw hostileRegistrationPrototype; },
+});
+assertSanitizedRegistrationFailure(
+  () => createRegistrationClientActivation({ config: hostilePrototypeConfig, sdk: offlineSdk }).activate(),
+  /PRIVATE_REGISTRATION_PROTOTYPE|PRIVATE_REGISTRATION_PROTOTYPE_TRAP/
+);
+
+const safeRegistrationError = new SupabaseConfigurationError('Supabase Project URL is missing or malformed.');
+safeRegistrationError.cause = new Error('PRIVATE_REGISTRATION_CAUSE');
+const safeErrorConfig = { publishableKey: offlinePublicConfig.publishableKey };
+Object.defineProperty(safeErrorConfig, 'url', { get() { throw safeRegistrationError; } });
+assert.throws(
+  () => createRegistrationClientActivation({ config: safeErrorConfig, sdk: offlineSdk }).activate(),
+  (error) => error !== safeRegistrationError
+    && error.message === 'Supabase Project URL is missing or malformed.'
+    && error.cause === undefined
+);
+
+for (const hostileControllerOptions of [
+  new Proxy({}, { get() { throw new Error('PRIVATE_CONTROLLER_GET'); } }),
+  new Proxy({}, { ownKeys() { throw new Error('PRIVATE_COMPOSITION_KEYS'); } }),
+]) {
+  assert.doesNotThrow(() => createRegistrationControllerActivation(hostileControllerOptions));
+  assert.equal(createRegistrationControllerActivation(hostileControllerOptions).activate(), false);
+  assert.equal(createRegistrationComposition(hostileControllerOptions).activate(), false);
+  assert.equal(gatedPage.createComposition(hostileControllerOptions).activate(), false);
+}
 
 const validInput = Object.freeze({
   displayName: '  Test Cook  ',

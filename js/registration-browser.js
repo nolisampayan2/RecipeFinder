@@ -1,4 +1,10 @@
-import { createPkceBrowserInitializer } from './supabase-browser.js';
+import { createSupabasePageClientOwner } from './supabase-browser.js';
+import {
+  SUPABASE_CLIENT_PROFILE,
+  SUPABASE_SDK_VERSION,
+  SUPABASE_UMD_URL,
+  SupabaseConfigurationError,
+} from './supabase-client.js';
 import { createRegistrationService } from './registration.js';
 import {
   activateRegistrationSubmitController,
@@ -11,22 +17,96 @@ export const REGISTRATION_CLIENT_STATE = Object.freeze({
   UNAVAILABLE: 'unavailable',
 });
 
-export function createRegistrationClientActivation(dependencies) {
-  const initializer = createPkceBrowserInitializer(dependencies);
+function registrationClientInitializationFailure() {
+  return new SupabaseConfigurationError('Supabase client initialization failed.');
+}
+
+const SAFE_REGISTRATION_CONFIGURATION_MESSAGES = new Set([
+  'Supabase public configuration is missing.',
+  'Supabase Project URL is missing or malformed.',
+  'Supabase Project URL must be an HTTPS origin without credentials, paths, query parameters, or fragments.',
+  'Supabase publishable key is missing or malformed.',
+  'Privileged Supabase keys are forbidden in browser configuration.',
+  'Supabase client initialization is already in progress.',
+  `Supabase JavaScript ${SUPABASE_SDK_VERSION} is not loaded. Load ${SUPABASE_UMD_URL} before the module entrypoint.`,
+]);
+
+function getSafeRegistrationConfigurationMessage(error) {
+  try {
+    if (!(error instanceof SupabaseConfigurationError)) return null;
+    const message = error.message;
+    return typeof message === 'string' && SAFE_REGISTRATION_CONFIGURATION_MESSAGES.has(message)
+      ? message
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function createRegistrationClientActivation(options = {}) {
+  let config;
+  let sdk;
+  let owner;
+  let createClientOwner;
+  try {
+    config = options?.config;
+    sdk = options?.sdk;
+    owner = options?.owner;
+    createClientOwner = options?.createClientOwner;
+  } catch {
+    throw registrationClientInitializationFailure();
+  }
+  if (createClientOwner === undefined) createClientOwner = createSupabasePageClientOwner;
+
+  let preparedOwner = owner ?? null;
+  const trustedDefaultOwner = owner == null && createClientOwner === createSupabasePageClientOwner;
 
   return Object.freeze({
+    profile: SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION,
+
     activate() {
-      return initializer.initialize();
+      if (!preparedOwner) {
+        if (typeof createClientOwner !== 'function') throw registrationClientInitializationFailure();
+        try {
+          preparedOwner = createClientOwner({
+            config,
+            sdk,
+            profile: SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION,
+          });
+        } catch {
+          throw registrationClientInitializationFailure();
+        }
+      }
+
+      try {
+        return preparedOwner.initialize(SUPABASE_CLIENT_PROFILE.PKCE_PREPARATION);
+      } catch (error) {
+        const safeMessage = trustedDefaultOwner
+          ? getSafeRegistrationConfigurationMessage(error)
+          : null;
+        if (safeMessage) throw new SupabaseConfigurationError(safeMessage);
+        throw registrationClientInitializationFailure();
+      }
     },
   });
 }
 
-export function createRegistrationControllerActivation({
-  registrationService,
-  createController = createRegistrationSubmitController,
-  installController = activateRegistrationSubmitController,
-  removeController = deactivateRegistrationSubmitController,
-} = {}) {
+export function createRegistrationControllerActivation(options = {}) {
+  let registrationService;
+  let createController;
+  let installController;
+  let removeController;
+  try {
+    registrationService = options?.registrationService;
+    createController = options?.createController;
+    installController = options?.installController;
+    removeController = options?.removeController;
+  } catch {
+    return Object.freeze({ activate: () => false, cleanup: () => false });
+  }
+  if (createController === undefined) createController = createRegistrationSubmitController;
+  if (installController === undefined) installController = activateRegistrationSubmitController;
+  if (removeController === undefined) removeController = deactivateRegistrationSubmitController;
   let controller = null;
   let activated = false;
 
@@ -77,17 +157,35 @@ export function createRegistrationControllerActivation({
  * Composes the cached PKCE client, registration service, and UI controller.
  * Nothing is initialized or installed until activate() is called explicitly.
  */
-export function createRegistrationComposition({
-  clientActivation,
-  clientDependencies,
-  registrationService,
-  createClientActivation = createRegistrationClientActivation,
-  createService = createRegistrationService,
-  createControllerActivation = createRegistrationControllerActivation,
-  createController = createRegistrationSubmitController,
-  installController = activateRegistrationSubmitController,
-  removeController = deactivateRegistrationSubmitController,
-} = {}) {
+export function createRegistrationComposition(options = {}) {
+  let clientActivation;
+  let clientDependencies;
+  let registrationService;
+  let createClientActivation;
+  let createService;
+  let createControllerActivation;
+  let createController;
+  let installController;
+  let removeController;
+  try {
+    clientActivation = options?.clientActivation;
+    clientDependencies = options?.clientDependencies;
+    registrationService = options?.registrationService;
+    createClientActivation = options?.createClientActivation;
+    createService = options?.createService;
+    createControllerActivation = options?.createControllerActivation;
+    createController = options?.createController;
+    installController = options?.installController;
+    removeController = options?.removeController;
+  } catch {
+    return Object.freeze({ activate: () => false, cleanup: () => false });
+  }
+  if (createClientActivation === undefined) createClientActivation = createRegistrationClientActivation;
+  if (createService === undefined) createService = createRegistrationService;
+  if (createControllerActivation === undefined) createControllerActivation = createRegistrationControllerActivation;
+  if (createController === undefined) createController = createRegistrationSubmitController;
+  if (installController === undefined) installController = activateRegistrationSubmitController;
+  if (removeController === undefined) removeController = deactivateRegistrationSubmitController;
   let preparedClientActivation = clientActivation ?? null;
   let controllerActivation = null;
 
@@ -143,35 +241,101 @@ export function createRegistrationComposition({
 }
 
 function setReadinessState(root, state) {
-  if (root?.dataset) root.dataset.supabaseClientState = state;
+  try {
+    if (root?.dataset) root.dataset.supabaseClientState = state;
+  } catch {
+    // Readiness state is advisory; hostile DOM-like dependencies stay private.
+  }
 }
 
-export function createRegistrationPageInitialization({ loadConfig, sdk, root } = {}) {
+export function createRegistrationPageInitialization(options = {}) {
+  let loadConfig;
+  let sdk;
+  let root;
+  let createClientActivation;
+  let createComposition;
+  try {
+    loadConfig = options?.loadConfig;
+    sdk = options?.sdk;
+    root = options?.root;
+    createClientActivation = options?.createClientActivation;
+    createComposition = options?.createComposition;
+  } catch {
+    throw registrationClientInitializationFailure();
+  }
+  if (createClientActivation === undefined) createClientActivation = createRegistrationClientActivation;
+  if (createComposition === undefined) createComposition = createRegistrationComposition;
+
   let initializationPromise;
+  let preparedClientActivation;
+  let readinessSucceeded = false;
+
+  const sharedClientActivation = Object.freeze({
+    activate() {
+      if (!readinessSucceeded || !preparedClientActivation) {
+        throw registrationClientInitializationFailure();
+      }
+      return preparedClientActivation.activate();
+    },
+  });
 
   return Object.freeze({
     initialize() {
       if (!initializationPromise) {
-        initializationPromise = (async () => {
+        const attempt = (async () => {
           try {
             if (typeof loadConfig !== 'function') throw new TypeError('Public configuration loader is unavailable.');
+            if (typeof createClientActivation !== 'function') throw new TypeError('Client activation factory is unavailable.');
 
-            const configModule = await loadConfig();
-            const activation = createRegistrationClientActivation({
-              config: configModule?.SUPABASE_CONFIG,
-              sdk,
-            });
-            activation.activate();
+            if (!preparedClientActivation) {
+              const configModule = await loadConfig();
+              let config;
+              try {
+                config = configModule?.SUPABASE_CONFIG;
+              } catch {
+                throw registrationClientInitializationFailure();
+              }
+              preparedClientActivation = createClientActivation({ config, sdk });
+            }
+            preparedClientActivation.activate();
             setReadinessState(root, REGISTRATION_CLIENT_STATE.READY);
+            readinessSucceeded = true;
             return REGISTRATION_CLIENT_STATE.READY;
           } catch {
+            readinessSucceeded = false;
             setReadinessState(root, REGISTRATION_CLIENT_STATE.UNAVAILABLE);
             return REGISTRATION_CLIENT_STATE.UNAVAILABLE;
           }
         })();
+        initializationPromise = attempt;
+        void attempt.then((state) => {
+          if (state === REGISTRATION_CLIENT_STATE.UNAVAILABLE && initializationPromise === attempt) {
+            initializationPromise = null;
+          }
+        });
       }
 
       return initializationPromise;
+    },
+
+    createComposition(compositionOptions = {}) {
+      if (typeof createComposition !== 'function') {
+        return Object.freeze({ activate: () => false, cleanup: () => false });
+      }
+      let preparedOptions;
+      try {
+        preparedOptions = {
+          ...compositionOptions,
+          clientActivation: sharedClientActivation,
+        };
+      } catch {
+        return Object.freeze({ activate: () => false, cleanup: () => false });
+      }
+      try {
+        return createComposition(preparedOptions);
+      } catch {
+        return Object.freeze({ activate: () => false, cleanup: () => false });
+      }
     },
   });
 }
