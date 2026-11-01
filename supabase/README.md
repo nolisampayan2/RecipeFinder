@@ -2,11 +2,14 @@
 
 Phase 2B creates local design files only. Nothing in this directory has been applied to a database.
 
-## Batch 6B.4A disposable authentication readiness runbook
+## Batch 6B.4 shared-project authentication readiness runbook
 
-This runbook prepares a later, separately authorized test against a disposable
-Supabase project. It does not authorize project creation, configuration changes,
-email delivery, SQL execution, account creation, deployment, or real Auth calls.
+RecipeFinder uses one existing Supabase Free project for controlled development
+testing and eventual production. Treat that project as production-sensitive and
+potentially nonempty. Do not infer emptiness from dashboard estimates, project
+age, or the absence of known users. This runbook does not authorize configuration
+changes, email delivery, SQL execution, account creation, deployment, or real
+Auth calls.
 
 ### Current evidence boundary
 
@@ -25,11 +28,12 @@ seed behavior, grants, RLS, and administrative provisioning.
 
 ### Authorization gates
 
-Stop and obtain explicit approval before each state-changing stage:
+Stop and obtain explicit approval before each inspection or state-changing stage:
 
-1. Create or select a disposable Supabase project.
+1. Inspect the selected shared project's catalog using only the separately
+   approved read-only queries below.
 2. Change Auth, email, URL, or rate-limit settings.
-3. create a local public configuration file or configure deployment variables.
+3. Create a local public configuration file or configure deployment variables.
 4. Apply the foundation migration or seed.
 5. Create accounts, send email, exchange a real code, sign in, or sign out.
 6. Provision an administrator or run database security tests.
@@ -37,10 +41,15 @@ Stop and obtain explicit approval before each state-changing stage:
 
 Do not combine these gates into one implied authorization.
 
-### Disposable project checklist
+### Shared-project safety checklist
 
-- [ ] Confirm the project is disposable and contains no production or personal data.
-- [ ] Record the project owner and deletion date outside the repository.
+- [ ] Confirm the exact project reference outside the repository without recording
+      credentials, keys, connection strings, or personal information.
+- [ ] Treat all existing schemas, objects, Auth identities, and rows as data that
+      must be preserved until an authorized inspection proves otherwise.
+- [ ] Confirm the operator is using a read-only inspection session where the
+      Supabase interface supports it; otherwise review every statement before use.
+- [ ] Capture a verified backup before any later schema or data change.
 - [ ] Use only a project URL and a browser-safe publishable/anon key in the frontend.
 - [ ] Never expose a secret key, `service_role` key, JWT secret, database password,
       management token, SMTP credential, or trusted SQL connection string.
@@ -49,7 +58,257 @@ Do not combine these gates into one implied authorization.
       null signup session and requires manual login after confirmation.
 - [ ] Review email-template links, expiry, resend cooldowns, and Auth rate limits.
 - [ ] Configure exact redirect URLs only. Do not add wildcard origins for convenience.
-- [ ] Confirm the project can be deleted without affecting another environment.
+- [ ] Do not delete, reset, pause, restore, or repurpose the shared project as part
+      of inspection.
+
+### Read-only catalog inspection gate
+
+The queries in this section are preparation material only. **Do not execute them
+without separate authorization.** They are intentionally limited to `SELECT` and
+return catalog metadata, aggregate counts, or known non-personal identifiers. Do
+not add queries that return rows from `auth.users`, `auth.identities`, profiles,
+Favorites, sessions, audit logs, or storage objects. Never select email addresses,
+phone numbers, passwords, password hashes, tokens, JWTs, session data, provider
+metadata, confirmation links, IP addresses, or user metadata.
+
+Before inspecting, verify the selected project independently. Save only sanitized
+results: object names, owners, grants, policy definitions, migration versions, and
+aggregate counts. Treat unexpected schemas, owners, grants, objects, migrations,
+or nonzero counts as a stop condition.
+
+#### 1. Schemas and relation ownership
+
+```sql
+select
+  n.nspname as schema_name,
+  pg_catalog.pg_get_userbyid(n.nspowner) as owner_name
+from pg_catalog.pg_namespace as n
+where n.nspname in ('public', 'private', 'auth', 'supabase_migrations')
+order by n.nspname;
+
+select
+  n.nspname as schema_name,
+  c.relname as relation_name,
+  c.relkind as relation_kind,
+  pg_catalog.pg_get_userbyid(c.relowner) as owner_name,
+  c.relrowsecurity as rls_enabled,
+  c.relforcerowsecurity as rls_forced
+from pg_catalog.pg_class as c
+join pg_catalog.pg_namespace as n on n.oid = c.relnamespace
+where n.nspname in ('public', 'private')
+  and c.relkind in ('r', 'p', 'v', 'm', 'S')
+order by n.nspname, c.relname;
+```
+
+#### 2. Columns, constraints, and indexes
+
+```sql
+select
+  table_schema,
+  table_name,
+  column_name,
+  ordinal_position,
+  data_type,
+  is_nullable,
+  column_default,
+  is_identity
+from information_schema.columns
+where table_schema = 'public'
+  and table_name in (
+    'profiles', 'user_roles', 'recipe_categories',
+    'cuisines', 'recipes', 'favorites'
+  )
+order by table_name, ordinal_position;
+
+select
+  n.nspname as schema_name,
+  c.relname as table_name,
+  con.conname as constraint_name,
+  con.contype as constraint_type,
+  pg_catalog.pg_get_constraintdef(con.oid, true) as definition
+from pg_catalog.pg_constraint as con
+join pg_catalog.pg_class as c on c.oid = con.conrelid
+join pg_catalog.pg_namespace as n on n.oid = c.relnamespace
+where n.nspname = 'public'
+  and c.relname in (
+    'profiles', 'user_roles', 'recipe_categories',
+    'cuisines', 'recipes', 'favorites'
+  )
+order by c.relname, con.conname;
+
+select schemaname, tablename, indexname, indexdef
+from pg_catalog.pg_indexes
+where schemaname = 'public'
+  and tablename in (
+    'profiles', 'user_roles', 'recipe_categories',
+    'cuisines', 'recipes', 'favorites'
+  )
+order by tablename, indexname;
+```
+
+#### 3. Functions and triggers
+
+```sql
+select
+  n.nspname as schema_name,
+  p.proname as function_name,
+  pg_catalog.pg_get_function_identity_arguments(p.oid) as identity_arguments,
+  pg_catalog.pg_get_userbyid(p.proowner) as owner_name,
+  p.prosecdef as security_definer,
+  p.proconfig as function_settings
+from pg_catalog.pg_proc as p
+join pg_catalog.pg_namespace as n on n.oid = p.pronamespace
+where n.nspname in ('public', 'private')
+order by n.nspname, p.proname, identity_arguments;
+
+select
+  ns.nspname as table_schema,
+  cls.relname as table_name,
+  trg.tgname as trigger_name,
+  pg_catalog.pg_get_triggerdef(trg.oid, true) as definition
+from pg_catalog.pg_trigger as trg
+join pg_catalog.pg_class as cls on cls.oid = trg.tgrelid
+join pg_catalog.pg_namespace as ns on ns.oid = cls.relnamespace
+where not trg.tgisinternal
+  and ns.nspname in ('public', 'auth')
+order by ns.nspname, cls.relname, trg.tgname;
+```
+
+#### 4. RLS policies and grants
+
+```sql
+select
+  schemaname,
+  tablename,
+  policyname,
+  permissive,
+  roles,
+  cmd,
+  qual,
+  with_check
+from pg_catalog.pg_policies
+where schemaname = 'public'
+order by tablename, policyname;
+
+select table_schema, table_name, grantee, privilege_type, is_grantable
+from information_schema.role_table_grants
+where table_schema in ('public', 'private')
+order by table_schema, table_name, grantee, privilege_type;
+
+select routine_schema, routine_name, grantee, privilege_type, is_grantable
+from information_schema.role_routine_grants
+where routine_schema in ('public', 'private')
+order by routine_schema, routine_name, grantee, privilege_type;
+
+select object_schema, object_name, object_type, grantee, privilege_type
+from information_schema.role_usage_grants
+where object_schema in ('public', 'private')
+order by object_schema, object_name, grantee, privilege_type;
+```
+
+#### 5. Migration history presence
+
+Check for the migration-history relation before querying it:
+
+```sql
+select pg_catalog.to_regclass('supabase_migrations.schema_migrations')
+  as migration_history_relation;
+```
+
+Only if that result confirms the expected relation exists, inspect identifiers
+without returning stored SQL bodies:
+
+```sql
+select version, name
+from supabase_migrations.schema_migrations
+order by version;
+```
+
+If the installed Supabase schema uses different columns, stop and inspect its
+catalog definition; do not improvise a query that returns migration statements.
+
+#### 6. Aggregate Auth and application counts
+
+These queries return counts only. They must never be expanded to select identity
+rows or contact information.
+
+```sql
+select
+  count(*) as auth_user_count,
+  count(*) filter (where email_confirmed_at is not null) as confirmed_user_count,
+  count(*) filter (where email_confirmed_at is null) as unconfirmed_user_count
+from auth.users;
+```
+
+Run the following only after the relation inventory confirms all six application
+tables exist:
+
+```sql
+select 'profiles' as relation_name, count(*) as row_count from public.profiles
+union all
+select 'user_roles', count(*) from public.user_roles
+union all
+select 'recipe_categories', count(*) from public.recipe_categories
+union all
+select 'cuisines', count(*) from public.cuisines
+union all
+select 'recipes', count(*) from public.recipes
+union all
+select 'favorites', count(*) from public.favorites
+order by relation_name;
+```
+
+#### 7. Seed collision counts
+
+Run these only if the relevant tables already exist. They return aggregate counts,
+not stored content:
+
+```sql
+select count(*) as category_slug_collisions
+from public.recipe_categories
+where slug = any (array[
+  'chicken', 'beef', 'seafood', 'pasta',
+  'vegetarian', 'dessert', 'breakfast', 'soup'
+]);
+
+select count(*) as cuisine_slug_collisions
+from public.cuisines
+where slug = any (array[
+  'italian', 'american', 'british', 'mexican',
+  'japanese', 'indian', 'french', 'mediterranean'
+]);
+
+select count(*) as recipe_id_collisions
+from public.recipes
+where id = any (array[
+  'creamy-garlic-pasta', 'lemon-chicken', 'beef-stew',
+  'fish-tacos', 'chocolate-cake', 'garden-salad',
+  'tomato-soup', 'vegetable-curry', 'pancakes', 'salmon-bowl'
+]);
+```
+
+Any collision means `seed.sql` is unsafe to run without a separately audited data
+plan. A zero collision count is not by itself seed authorization; backup and all
+other gates still apply.
+
+### Compatibility decision gate
+
+After a separately authorized inspection, independently review the sanitized
+results against `202610270001_recipefinder_foundation.sql`:
+
+- **Genuinely empty and compatible:** no overlapping RecipeFinder objects, no
+  application rows, no existing Auth users requiring backfill, expected trusted
+  owners, and no conflicting migration history. Re-audit the original foundation
+  migration for this exact project before separately authorizing execution.
+- **Overlapping objects, migrations, rows, or Auth users:** do not run the original
+  fresh-project migration. Prepare a forward-compatible, idempotent migration and
+  any non-destructive profile/default-role backfill as a new independently audited
+  batch. Never overwrite an existing role.
+- **Uncertain or incomplete evidence:** remain blocked. Do not infer compatibility.
+
+`seed.sql` remains prohibited until a verified backup exists, collision checks are
+zero or an explicit preservation plan is approved, the schema migration and real
+RLS tests pass, and seed execution receives separate authorization.
 
 ### Exact localhost routes
 
@@ -64,7 +323,7 @@ HTTPS, a different port, or a different path during the PKCE round trip.
 | Manual login | `http://localhost/RecipeFinder/login.html` |
 | Dashboard | `http://localhost/RecipeFinder/index.html` |
 
-The exact callback URL above must be present in the disposable project's Auth
+The exact callback URL above must be present in the shared project's Auth
 redirect allowlist. It must not contain credentials, a query string, or a
 fragment when configured. Supabase adds the one-time callback parameters during
 the real flow; RecipeFinder captures and scrubs them on arrival.
@@ -130,16 +389,18 @@ design, test, and authorize the generator before any Preview deployment.
 
 ### Foundation migration prerequisites
 
-- [ ] Use a fresh disposable project and inspect the entire migration before execution.
+- [ ] Complete the shared-project catalog inspection and compatibility decision gate.
 - [ ] Confirm the migration targets the expected project and is run by a trusted owner.
 - [ ] Review every table, constraint, trigger, function owner, grant, revoke, and policy.
 - [ ] Confirm `private.handle_new_user()` remains owned by the trusted migration
       owner, has an empty search path, and is executable only where documented.
-- [ ] Apply the foundation migration before creating the first test Auth user so
-      the signup trigger is exercised and no profile/role backfill is required.
+- [ ] If Auth users already exist, stop and independently audit a non-destructive
+      profile/default-role backfill before any foundation change.
 - [ ] Treat any signup-trigger error as a stop condition; do not bypass the trigger.
-- [ ] Apply `seed.sql` once only after the migration and security inspection pass.
-- [ ] Do not apply the migration or seed to an existing or production project.
+- [ ] Keep `seed.sql` prohibited until backup, collision checks, migration
+      verification, and real RLS negative tests pass.
+- [ ] Never run the fresh-project migration directly when overlapping objects,
+      migrations, rows, or Auth users exist.
 
 ### Signup trigger and RLS verification
 
@@ -159,7 +420,7 @@ After separately authorized migration application and account creation:
 
 ### Fictional test-account and inbox policy
 
-- Use a dedicated disposable test inbox controlled by the project operator, not a
+- Use a dedicated fictional test inbox controlled by the project operator, not a
   personal, school, production, or third-party address.
 - Use fictional display names and unique inbox aliases for each scenario, such as
   confirmed, unconfirmed, expired-link, and resend tests.
@@ -213,19 +474,27 @@ Stop immediately if any of the following occurs:
 - A migration, trigger, grant, RLS policy, seed, or negative-security test differs from review.
 - Guest discovery or local Favorites are modified, uploaded, merged, or deleted.
 
-Rollback for this disposable phase means stop browser activity, close the test
-session, revoke/delete test users through trusted project controls, remove the
-local ignored configuration, and delete the disposable project after evidence is
-sanitized and retained. Do not improvise destructive SQL, weaken RLS, disable the
-signup trigger, reuse callback codes, or redirect testing to another environment.
+Rollback for the shared project must be planned before every later change. A
+verified logical backup or provider-supported restore path, pre-change catalog and
+row counts, a forward remediation plan, and explicit restore authority are
+prerequisites. Free-plan capabilities must be confirmed rather than assumed. Stop
+browser activity and further writes on any failure; do not delete or reset the
+shared project, improvise destructive SQL, weaken RLS, disable the signup trigger,
+reuse callback codes, or redirect testing to another environment.
 
 ## Intended order
 
 1. Review `migrations/202610270001_recipefinder_foundation.sql`.
-2. In a later approved batch, apply it to a disposable/local Supabase environment first.
-3. Run the RLS and negative-security tests described below.
-4. Apply `seed.sql` once as initial setup only, after the foundation migration succeeds.
-5. Verify 8 categories, 8 cuisines, and 10 published recipes before any frontend integration.
+2. In a later approved batch, run only the read-only catalog inspection and
+   independently review its sanitized results.
+3. Choose either the re-audited original migration for a genuinely empty compatible
+   project or a separately audited forward-compatible migration.
+4. Create and verify a backup before separately authorized schema execution.
+5. Run the RLS and negative-security tests described below, including mandatory
+   email-confirmation behavior.
+6. Consider `seed.sql` only after backup and collision gates pass; otherwise skip it.
+7. If seeding is separately approved, verify 8 categories, 8 cuisines, and 10
+   published recipes without overwriting existing CMS content.
 
 The foundation migration uses one transaction so schema creation, grants, and RLS policies succeed or fail together. The seed is a separate transaction because reference/sample content has a different review and rerun lifecycle.
 
@@ -241,7 +510,7 @@ The foundation migration uses one transaction so schema creation, grants, and RL
 - Table and identity-sequence privileges are explicitly revoked from `PUBLIC`, `anon`, and `authenticated` before minimum privileges are granted. Authenticated access to category and cuisine identity sequences is limited to `USAGE`, which is required for administrator inserts through the shared authenticated database role. Profile updates are limited to `display_name` and `avatar_url`. RLS is an additional enforcement layer, not a substitute for grants.
 - Seed users and credentials are intentionally absent.
 
-`private.handle_new_user()` and `private.is_admin()` are `SECURITY DEFINER` functions. They use an empty search path and fully qualified object names. They must remain owned by the trusted migration owner. Do not transfer ownership to a login role or grant public execution. The signup trigger must be tested in a disposable environment because any trigger failure can block user creation.
+`private.handle_new_user()` and `private.is_admin()` are `SECURITY DEFINER` functions. They use an empty search path and fully qualified object names. They must remain owned by the trusted migration owner. Do not transfer ownership to a login role or grant public execution. The signup trigger must be tested under controlled conditions because any trigger failure can block user creation.
 
 All private helper functions have default `PUBLIC` execution removed. Only roles that require each helper receive explicit schema and function privileges. The taxonomy-integrity triggers use transaction-scoped advisory locks with distinct category and cuisine lock namespaces. This serializes publication against taxonomy deactivation, including concurrent requests. Superusers or migration owners can still bypass application RLS and can disable triggers, so operational access to those roles remains trusted and out of browser scope. Advisory-lock hash collisions can conservatively serialize unrelated writes but do not weaken integrity.
 
@@ -297,7 +566,8 @@ External API integration remains deferred. When it is implemented, frontend-faci
 
 ## Negative security tests for the application batch
 
-These cases must be executed against a disposable/local Supabase project before remote use:
+These cases must be executed against the shared project only after backup, migration
+verification, and separate authorization, and before retaining any production data:
 
 1. Anonymous user can read published recipes but cannot read drafts or mutate any table.
 2. Ordinary authenticated user cannot read drafts or mutate recipes, categories, or cuisines.
