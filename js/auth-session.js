@@ -19,6 +19,14 @@ function isMeaningfulString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function hasValidSessionExpiry(session, now) {
+  const expiresAt = session.expires_at;
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= 0) return false;
+  const nowMilliseconds = now();
+  if (typeof nowMilliseconds !== 'number' || !Number.isFinite(nowMilliseconds)) return false;
+  return expiresAt > Math.floor(nowMilliseconds / 1000);
+}
+
 function isExplicitSuccess(response) {
   return Boolean(
     isNonArrayObject(response)
@@ -93,13 +101,14 @@ export function isEmailConfirmed(user) {
   return isValidConfirmationTimestamp(user.email_confirmed_at);
 }
 
-function stateForSession(session) {
+function stateForSession(session, now) {
   if (session === null) return Object.freeze({ status: AUTH_SESSION_STATUS.GUEST, user: null });
   if (
     !isNonArrayObject(session)
     || !isMeaningfulString(session.access_token)
     || !isMeaningfulString(session.refresh_token)
     || !isNonArrayObject(session.user)
+    || !hasValidSessionExpiry(session, now)
   ) return errorState();
 
   const user = publicUser(session.user);
@@ -116,7 +125,7 @@ function errorState() {
   return Object.freeze({ status: AUTH_SESSION_STATUS.ERROR, user: null, error: PUBLIC_ERROR });
 }
 
-function stateForSessionResponse(result) {
+function stateForSessionResponse(result, now) {
   if (
     !isExplicitSuccess(result)
     || !Object.prototype.hasOwnProperty.call(result, 'data')
@@ -124,7 +133,7 @@ function stateForSessionResponse(result) {
     || !Object.prototype.hasOwnProperty.call(result.data, 'session')
     || result.data.session === undefined
   ) return errorState();
-  return stateForSession(result.data.session);
+  return stateForSession(result.data.session, now);
 }
 
 function requireAuthClient(client) {
@@ -144,14 +153,17 @@ function requireAuthClient(client) {
  * Creates an explicit, offline-testable session state boundary.
  * Public snapshots contain no access tokens, refresh tokens, or raw errors.
  */
-export function createAuthSessionService(client) {
+export function createAuthSessionService(client, { now = Date.now } = {}) {
   const auth = requireAuthClient(client);
+  if (typeof now !== 'function') throw new TypeError('An Auth session clock is required.');
   const listeners = new Set();
   let state = Object.freeze({ status: AUTH_SESSION_STATUS.LOADING, user: null });
   let bootstrapPromise = null;
+  let logoutPromise = null;
   let authSubscription = null;
   let generation = 0;
   let cleanedUp = false;
+  let logoutPending = false;
 
   const notifyListener = (listener) => {
     try {
@@ -168,16 +180,16 @@ export function createAuthSessionService(client) {
   };
 
   const processAuthEvent = (event, session) => {
-    if (cleanedUp) return state;
+    if (cleanedUp || logoutPending) return state;
     const eventGeneration = ++generation;
     try {
       let nextState;
       if (event === 'SIGNED_OUT') {
-        nextState = session === null ? stateForSession(null) : errorState();
+        nextState = session === null ? stateForSession(null, now) : errorState();
       } else if (session === null && event !== 'INITIAL_SESSION') {
         nextState = errorState();
       } else {
-        nextState = stateForSession(session);
+        nextState = stateForSession(session, now);
       }
       return cleanedUp || eventGeneration !== generation ? state : publish(nextState);
     } catch {
@@ -265,7 +277,7 @@ export function createAuthSessionService(client) {
             if (!installAuthSubscription()) return state;
             const result = await auth.getSession();
             if (cleanedUp || bootstrapGeneration !== generation) return state;
-            return publish(stateForSessionResponse(result));
+            return publish(stateForSessionResponse(result, now));
           } catch {
             if (cleanedUp || bootstrapGeneration !== generation) return state;
             return publish(errorState());
@@ -275,19 +287,30 @@ export function createAuthSessionService(client) {
       return bootstrapPromise;
     },
 
-    async logout() {
-      if (cleanedUp) return errorState();
-      const logoutGeneration = ++generation;
+    logout() {
+      if (cleanedUp) return Promise.resolve(errorState());
+      if (logoutPromise) return logoutPromise;
+      generation += 1;
+      logoutPending = true;
       publish(Object.freeze({ status: AUTH_SESSION_STATUS.LOADING, user: null }));
-      try {
-        const result = await auth.signOut({ scope: 'local' });
-        if (cleanedUp || logoutGeneration !== generation) return state;
-        if (!isExplicitSuccess(result)) return publish(errorState());
-        return publish(Object.freeze({ status: AUTH_SESSION_STATUS.GUEST, user: null }));
-      } catch {
-        if (cleanedUp || logoutGeneration !== generation) return state;
-        return publish(errorState());
-      }
+      const attempt = (async () => {
+        try {
+          const result = await auth.signOut({ scope: 'local' });
+          if (cleanedUp) return state;
+          if (!isExplicitSuccess(result)) return publish(errorState());
+          return publish(Object.freeze({ status: AUTH_SESSION_STATUS.GUEST, user: null }));
+        } catch {
+          if (cleanedUp) return state;
+          return publish(errorState());
+        } finally {
+          logoutPending = false;
+        }
+      })();
+      logoutPromise = attempt;
+      void attempt.then(() => {
+        if (logoutPromise === attempt) logoutPromise = null;
+      });
+      return attempt;
     },
 
     cleanup() {

@@ -21,6 +21,9 @@ const unconfirmedUser = Object.freeze({
   email: 'pending@example.test',
   user_metadata: { email_verified: true },
 });
+const FIXED_NOW_MILLISECONDS = Date.UTC(2026, 10, 1, 12, 0, 0);
+const FIXED_NOW_SECONDS = Math.floor(FIXED_NOW_MILLISECONDS / 1000);
+const VALID_EXPIRY_SECONDS = 4102444800;
 
 function deferred() {
   let resolve;
@@ -32,6 +35,7 @@ function sessionFor(user = confirmedUser) {
   return {
     access_token: 'fixture-access-token',
     refresh_token: 'fixture-refresh-token',
+    expires_at: VALID_EXPIRY_SECONDS,
     user,
   };
 }
@@ -128,6 +132,65 @@ assert.deepEqual(await confirmedService.bootstrap(), {
 });
 assert.doesNotMatch(JSON.stringify(confirmedService.getState()), /never-public|access_token|refresh_token/);
 
+for (const expiresAt of [
+  undefined,
+  null,
+  '',
+  String(FIXED_NOW_SECONDS + 60),
+  Number.NaN,
+  Number.POSITIVE_INFINITY,
+  FIXED_NOW_SECONDS + 0.5,
+  0,
+  -1,
+  FIXED_NOW_SECONDS,
+  FIXED_NOW_SECONDS - 1,
+]) {
+  const expiryFake = createFakeClient({ session: { ...sessionFor(), expires_at: expiresAt } });
+  const expiryService = createAuthSessionService(expiryFake.client, { now: () => FIXED_NOW_MILLISECONDS });
+  assert.equal(
+    (await expiryService.bootstrap()).status,
+    AUTH_SESSION_STATUS.ERROR,
+    `Expiry evidence ${String(expiresAt)} must fail closed`,
+  );
+  assert.doesNotMatch(JSON.stringify(expiryService.getState()), /expires_at|fixture-access-token|fixture-refresh-token/);
+}
+
+const validExpiryFake = createFakeClient({
+  session: { ...sessionFor(), expires_at: FIXED_NOW_SECONDS + 1 },
+});
+const validExpiryService = createAuthSessionService(validExpiryFake.client, {
+  now: () => FIXED_NOW_MILLISECONDS,
+});
+assert.equal((await validExpiryService.bootstrap()).status, AUTH_SESSION_STATUS.AUTHENTICATED);
+
+const throwingExpirySession = { ...sessionFor() };
+Object.defineProperty(throwingExpirySession, 'expires_at', {
+  get() { throw new Error('PRIVATE_EXPIRY_GETTER'); },
+});
+const throwingExpiryFake = createFakeClient({ session: throwingExpirySession });
+const throwingExpiryService = createAuthSessionService(throwingExpiryFake.client, {
+  now: () => FIXED_NOW_MILLISECONDS,
+});
+assert.equal((await throwingExpiryService.bootstrap()).status, AUTH_SESSION_STATUS.ERROR);
+assert.doesNotMatch(JSON.stringify(throwingExpiryService.getState()), /PRIVATE_EXPIRY_GETTER/);
+
+const refreshedExpiryFake = createFakeClient({
+  session: { ...sessionFor(), expires_at: FIXED_NOW_SECONDS - 1 },
+});
+const refreshedExpiryService = createAuthSessionService(refreshedExpiryFake.client, {
+  now: () => FIXED_NOW_MILLISECONDS,
+});
+assert.equal((await refreshedExpiryService.bootstrap()).status, AUTH_SESSION_STATUS.ERROR);
+refreshedExpiryFake.emit('TOKEN_REFRESHED', {
+  ...sessionFor(),
+  expires_at: FIXED_NOW_SECONDS + 3600,
+});
+assert.equal(
+  refreshedExpiryService.getState().status,
+  AUTH_SESSION_STATUS.AUTHENTICATED,
+  'A later provider-refreshed session with valid expiry may authenticate',
+);
+
 const pendingFake = createFakeClient({ session: sessionFor(unconfirmedUser) });
 const pendingService = createAuthSessionService(pendingFake.client);
 assert.equal((await pendingService.bootstrap()).status, AUTH_SESSION_STATUS.PENDING_CONFIRMATION);
@@ -147,6 +210,83 @@ assert.equal(logoutFake.counts().signOutCalls, 1);
 assert.equal(logoutService.cleanup(), true);
 assert.equal(logoutService.cleanup(), false);
 assert.equal(logoutFake.counts().unsubscribeCalls, 1);
+
+for (const [event, eventSession] of [
+  ['SIGNED_IN', sessionFor()],
+  ['TOKEN_REFRESHED', sessionFor()],
+  ['SIGNED_OUT', null],
+]) {
+  const signOutRequest = deferred();
+  const fake = createFakeClient({
+    session: sessionFor(),
+    signOut: () => signOutRequest.promise,
+  });
+  const service = createAuthSessionService(fake.client);
+  await service.bootstrap();
+  const firstLogout = service.logout();
+  const duplicateLogout = service.logout();
+  assert.equal(duplicateLogout, firstLogout, 'Duplicate logout must share the pending operation');
+  assert.deepEqual(service.getState(), { status: AUTH_SESSION_STATUS.LOADING, user: null });
+  fake.emit(event, eventSession);
+  assert.deepEqual(
+    service.getState(),
+    { status: AUTH_SESSION_STATUS.LOADING, user: null },
+    `${event} must not publish while logout owns the state`,
+  );
+  signOutRequest.resolve({ error: null });
+  assert.deepEqual(await firstLogout, { status: AUTH_SESSION_STATUS.GUEST, user: null });
+  assert.equal(fake.counts().signOutCalls, 1);
+  fake.emit('SIGNED_IN', sessionFor());
+  assert.equal(
+    service.getState().status,
+    AUTH_SESSION_STATUS.AUTHENTICATED,
+    'Legitimate Auth events must resume after logout settles',
+  );
+}
+
+const logoutRestorationRequest = deferred();
+const logoutRestorationSignOut = deferred();
+const logoutRestorationFake = createFakeClient({
+  getSessionResult: () => logoutRestorationRequest.promise,
+  signOut: () => logoutRestorationSignOut.promise,
+});
+const logoutRestorationService = createAuthSessionService(logoutRestorationFake.client);
+const logoutRestorationBootstrap = logoutRestorationService.bootstrap();
+const logoutDuringRestoration = logoutRestorationService.logout();
+logoutRestorationRequest.resolve({ data: { session: sessionFor() }, error: null });
+await logoutRestorationBootstrap;
+assert.equal(logoutRestorationService.getState().status, AUTH_SESSION_STATUS.LOADING);
+logoutRestorationSignOut.resolve({ error: null });
+assert.equal((await logoutDuringRestoration).status, AUTH_SESSION_STATUS.GUEST);
+
+const pendingFailedSignOut = deferred();
+const pendingFailedLogoutFake = createFakeClient({
+  session: sessionFor(),
+  signOut: () => pendingFailedSignOut.promise,
+});
+const pendingFailedLogoutService = createAuthSessionService(pendingFailedLogoutFake.client);
+await pendingFailedLogoutService.bootstrap();
+const pendingFailedLogout = pendingFailedLogoutService.logout();
+pendingFailedLogoutFake.emit('SIGNED_IN', sessionFor());
+pendingFailedSignOut.resolve({ error: new Error('PRIVATE_PENDING_LOGOUT_FAILURE') });
+assert.equal((await pendingFailedLogout).status, AUTH_SESSION_STATUS.ERROR);
+assert.equal(pendingFailedLogoutService.getState().user, null);
+assert.doesNotMatch(JSON.stringify(pendingFailedLogoutService.getState()), /PRIVATE_PENDING_LOGOUT_FAILURE/);
+
+const cleanupLogoutRequest = deferred();
+const cleanupLogoutFake = createFakeClient({
+  session: sessionFor(),
+  signOut: () => cleanupLogoutRequest.promise,
+});
+const cleanupLogoutService = createAuthSessionService(cleanupLogoutFake.client);
+await cleanupLogoutService.bootstrap();
+const cleanupPendingLogout = cleanupLogoutService.logout();
+assert.equal(cleanupLogoutService.cleanup(), true);
+cleanupLogoutFake.emit('SIGNED_IN', sessionFor());
+cleanupLogoutRequest.resolve({ error: null });
+assert.equal((await cleanupPendingLogout).status, AUTH_SESSION_STATUS.LOADING);
+assert.equal(cleanupLogoutService.getState().status, AUTH_SESSION_STATUS.LOADING);
+assert.equal(cleanupLogoutFake.counts().signOutCalls, 1);
 
 const failedLogoutFake = createFakeClient({
   session: sessionFor(),
