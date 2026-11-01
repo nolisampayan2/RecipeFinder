@@ -51,6 +51,23 @@ function isRecord(value) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
+function mapDenseArray(value, mapper, fieldName) {
+  if (!Array.isArray(value)) throw new TypeError(`${fieldName} must be an array.`);
+  if (Object.prototype.hasOwnProperty.call(value, 'map')) {
+    throw new TypeError(`${fieldName} must not override array iteration.`);
+  }
+  const length = value.length;
+  const mapped = new Array(length);
+  for (let index = 0; index < length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) {
+      throw new TypeError(`${fieldName} must not be sparse.`);
+    }
+    const item = value[index];
+    mapped[index] = mapper(item, index);
+  }
+  return mapped;
+}
+
 function requiredText(value, fieldName) {
   if (typeof value !== 'string') throw new TypeError(`${fieldName} must be text.`);
   const normalized = value.trim();
@@ -72,7 +89,7 @@ function normalizeIngredients(value) {
     throw new TypeError('ingredients must be a non-empty array.');
   }
 
-  return Object.freeze(value.map((ingredient) => {
+  return Object.freeze(mapDenseArray(value, (ingredient) => {
     if (
       !isRecord(ingredient)
       || !Object.prototype.hasOwnProperty.call(ingredient, 'name')
@@ -84,7 +101,7 @@ function normalizeIngredients(value) {
       requiredText(ingredient.name, 'ingredient.name'),
       requiredText(ingredient.measurement, 'ingredient.measurement'),
     ]);
-  }));
+  }, 'ingredients'));
 }
 
 function requiredImageUrl(value, fieldName) {
@@ -126,7 +143,9 @@ function optionalTutorialUrl(value) {
   } catch {
     throw new TypeError('tutorial_url is unsafe.');
   }
-  if (parsed.protocol !== 'https:') throw new TypeError('tutorial_url must use HTTPS.');
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+    throw new TypeError('tutorial_url must use HTTPS without embedded credentials.');
+  }
   return parsed.href;
 }
 
@@ -214,12 +233,12 @@ export function createPublishedRecipeSource(client) {
         if (!isExplicitSuccess(response)) return SAFE_FAILURE;
 
         const seen = new Set();
-        const recipes = response.data.map((row) => {
+        const recipes = mapDenseArray(response.data, (row) => {
           const recipe = normalizePublishedRecipeRow(row);
           if (seen.has(recipe.id)) throw new TypeError('Duplicate recipe ID.');
           seen.add(recipe.id);
           return recipe;
-        });
+        }, 'response.data');
         return Object.freeze({ data: Object.freeze(recipes), error: null });
       } catch {
         return SAFE_FAILURE;

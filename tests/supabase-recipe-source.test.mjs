@@ -136,7 +136,10 @@ for (const response of [
   { data: [validRow({ image_url: 'https://user:password@example.test/private.png' })], error: null },
   { data: [validRow({ image_url: ' https://example.test/spaced.png' })], error: null },
   { data: [validRow({ fallback_image_url: 'data:text/html,unsafe' })], error: null },
+  { data: [validRow({ tutorial_url: 'https://user@example.test/tutorial' })], error: null },
+  { data: [validRow({ tutorial_url: 'https://user:password@example.test/tutorial' })], error: null },
   { data: [validRow({ tutorial_url: 'http://example.test/insecure' })], error: null },
+  { data: [validRow({ tutorial_url: 'not a URL' })], error: null },
   { data: [validRow({ status: 'draft' })], error: null },
   { data: [validRow({ source_type: 'cms', external_provider: 'unexpected' })], error: null },
   { data: [validRow({ source_type: 'external', external_provider: null, external_id: null })], error: null },
@@ -172,6 +175,67 @@ for (const invalidClient of [
 
 const rejectedQuery = fakeClient(null, { rejectWith: new Error('PRIVATE_QUERY_ERROR') });
 assert.deepEqual(await createPublishedRecipeSource(rejectedQuery.client).listPublished(), unavailable);
+
+const overriddenMapData = [validRow()];
+overriddenMapData.map = () => [{ id: 'incomplete-bypass' }];
+const overriddenMapResult = await createPublishedRecipeSource(
+  fakeClient({ data: overriddenMapData, error: null }).client
+).listPublished();
+assert.deepEqual(overriddenMapResult, unavailable);
+
+const emptyOverriddenMapData = [];
+emptyOverriddenMapData.map = () => [{ id: 'incomplete-bypass' }];
+assert.deepEqual(
+  await createPublishedRecipeSource(fakeClient({
+    data: emptyOverriddenMapData,
+    error: null,
+  }).client).listPublished(),
+  unavailable
+);
+
+const duplicateBypassData = [validRow(), validRow()];
+duplicateBypassData.map = () => [validRow(), validRow({ id: 'different-id' })];
+assert.deepEqual(
+  await createPublishedRecipeSource(fakeClient({ data: duplicateBypassData, error: null }).client).listPublished(),
+  unavailable
+);
+
+const sparseRows = new Array(1);
+assert.deepEqual(
+  await createPublishedRecipeSource(fakeClient({ data: sparseRows, error: null }).client).listPublished(),
+  unavailable
+);
+
+const hostileRows = [];
+Object.defineProperty(hostileRows, 0, {
+  configurable: true,
+  enumerable: true,
+  get() { throw new Error('PRIVATE_INDEX_ERROR'); },
+});
+hostileRows.length = 1;
+assert.deepEqual(
+  await createPublishedRecipeSource(fakeClient({ data: hostileRows, error: null }).client).listPublished(),
+  unavailable
+);
+
+const malformedIngredients = [{ name: 'Salt' }];
+malformedIngredients.map = () => [{ name: 'Salt', measurement: '1 tsp' }];
+assert.deepEqual(
+  await createPublishedRecipeSource(fakeClient({
+    data: [validRow({ ingredients: malformedIngredients })],
+    error: null,
+  }).client).listPublished(),
+  unavailable
+);
+
+const sparseIngredients = new Array(1);
+assert.deepEqual(
+  await createPublishedRecipeSource(fakeClient({
+    data: [validRow({ ingredients: sparseIngredients })],
+    error: null,
+  }).client).listPublished(),
+  unavailable
+);
 
 let fetchCalls = 0;
 const originalFetch = globalThis.fetch;
