@@ -1,11 +1,13 @@
 import { createSupabasePageClientOwner } from './supabase-browser.js';
 import { SUPABASE_CLIENT_PROFILE } from './supabase-client.js';
 import {
+  CALLBACK_DIAGNOSTIC_STAGE,
   CONFIRMATION_MESSAGES,
   CONFIRMATION_STATUS,
   confirmationResultView,
   createPkceConfirmationController,
   renderCallbackView,
+  reportCallbackDiagnostic,
   takePreparedAuthCallbackRequest,
 } from './auth-callback.js';
 import { createPkceCodeExchangeAdapter } from './auth-callback-exchange.js';
@@ -66,6 +68,7 @@ export function createManualLoginConfirmationOrchestration({
   preparedCallback,
   createExchangeAdapter = createPkceCodeExchangeAdapter,
   createController = createPkceConfirmationController,
+  onDiagnostic,
 } = {}) {
   let activationPromise;
 
@@ -80,11 +83,12 @@ export function createManualLoginConfirmationOrchestration({
             typeof createExchangeAdapter !== 'function' ||
             typeof createController !== 'function'
           ) {
+            reportCallbackDiagnostic(onDiagnostic, CALLBACK_DIAGNOSTIC_STAGE.CLIENT_READINESS);
             return unavailableConfirmation();
           }
 
           try {
-            const exchangeCode = createExchangeAdapter(client);
+            const exchangeCode = createExchangeAdapter(client, { onDiagnostic });
             const exchangeAndClearSession = async (code) => {
               const exchangeResult = await exchangeCode(code);
               if (!hasExplicitSuccess(exchangeResult) || exchangeResult.data?.confirmed !== true) {
@@ -94,9 +98,11 @@ export function createManualLoginConfirmationOrchestration({
               try {
                 const signOutResult = await client.auth.signOut({ scope: 'local' });
                 if (!hasExplicitSuccess(signOutResult)) {
+                  reportCallbackDiagnostic(onDiagnostic, CALLBACK_DIAGNOSTIC_STAGE.LOCAL_SIGN_OUT);
                   return Object.freeze({ data: null, error: true });
                 }
               } catch {
+                reportCallbackDiagnostic(onDiagnostic, CALLBACK_DIAGNOSTIC_STAGE.LOCAL_SIGN_OUT);
                 return Object.freeze({ data: null, error: true });
               }
 
@@ -106,9 +112,10 @@ export function createManualLoginConfirmationOrchestration({
               });
             };
 
-            const controller = createController({ exchangeAuthorizationCode: exchangeAndClearSession });
+            const controller = createController({ exchangeAuthorizationCode: exchangeAndClearSession, onDiagnostic });
             return await controller.process({ preparedCallback });
           } catch {
+            reportCallbackDiagnostic(onDiagnostic, CALLBACK_DIAGNOSTIC_STAGE.CLIENT_READINESS);
             return unavailableConfirmation();
           }
         })();
@@ -133,6 +140,7 @@ export function createCallbackConfirmationComposition({
   createOrchestration = createManualLoginConfirmationOrchestration,
   renderView = renderCallbackView,
   createView = confirmationResultView,
+  onDiagnostic,
 } = {}) {
   let preparedClientInitialization = clientInitialization ?? null;
   let callbackConsumed = false;
@@ -170,7 +178,7 @@ export function createCallbackConfirmationComposition({
               preparedClientInitialization = createClientInitialization(clientDependencies);
             }
             const client = preparedClientInitialization?.initialize?.();
-            const orchestration = createOrchestration({ client, preparedCallback: callbackRequest });
+            const orchestration = createOrchestration({ client, preparedCallback: callbackRequest, onDiagnostic });
             const result = normalizeConfirmation(await orchestration?.activate?.());
 
             if (!cleanedUp && activationGeneration === generation) {
@@ -178,6 +186,7 @@ export function createCallbackConfirmationComposition({
             }
             return result;
           } catch {
+            reportCallbackDiagnostic(onDiagnostic, CALLBACK_DIAGNOSTIC_STAGE.CLIENT_READINESS);
             const result = unavailableConfirmation();
             if (!cleanedUp && activationGeneration === generation) {
               try {
@@ -278,12 +287,14 @@ export function createLiveCallbackPageActivation(options = {}) {
   let loadConfig;
   let sdk;
   let root;
+  let onDiagnostic;
   try {
     pageInitialization = options?.pageInitialization;
     createPageInitialization = options?.createPageInitialization;
     loadConfig = options?.loadConfig;
     sdk = options?.sdk;
     root = options?.root;
+    onDiagnostic = options?.onDiagnostic;
   } catch {
     return unavailableLiveCallbackActivation();
   }
@@ -302,12 +313,18 @@ export function createLiveCallbackPageActivation(options = {}) {
           const page = pageInitialization || createPageInitialization({ loadConfig, sdk, root });
           if (await page.initialize() !== CALLBACK_CLIENT_STATE.READY || cleanedUp) {
             readinessFailed = !cleanedUp;
+            if (!cleanedUp) {
+              reportCallbackDiagnostic(onDiagnostic, CALLBACK_DIAGNOSTIC_STAGE.CLIENT_READINESS);
+            }
             return unavailableConfirmation();
           }
           readinessFailed = false;
-          composition = page.createConfirmationComposition({ root });
+          composition = page.createConfirmationComposition({ root, onDiagnostic });
           return normalizeConfirmation(await composition?.activate?.());
-        })().catch(() => unavailableConfirmation());
+        })().catch(() => {
+          reportCallbackDiagnostic(onDiagnostic, CALLBACK_DIAGNOSTIC_STAGE.CLIENT_READINESS);
+          return unavailableConfirmation();
+        });
         activationPromise = attempt;
         void attempt.then(() => {
           if (readinessFailed && activationPromise === attempt) activationPromise = null;

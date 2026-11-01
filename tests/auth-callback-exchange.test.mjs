@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
+  CALLBACK_DIAGNOSTIC_STAGE,
   CONFIRMATION_MESSAGES,
   CONFIRMATION_STATUS,
   createPkceConfirmationController,
@@ -23,6 +24,16 @@ const confirmedUser = Object.freeze({
   id: 'offline-confirmed-user',
   email_confirmed_at: '2026-10-29T08:00:00Z',
 });
+
+function diagnosticCollector() {
+  const events = [];
+  return Object.freeze({
+    events,
+    observe(event) {
+      events.push(event);
+    },
+  });
+}
 
 function confirmedSession() {
   return {
@@ -724,6 +735,107 @@ for (const hostileCallbackOptions of [
 assert.doesNotThrow(() => createLiveCallbackPageActivation(new Proxy({}, {
   ownKeys() { throw new Error('PRIVATE_CALLBACK_KEYS'); },
 })));
+
+// Sanitized diagnostics identify only the failed stage. They never contain
+// callback material, provider errors, sessions, or tokens and are opt-in only.
+const payloadDiagnostics = diagnosticCollector();
+const invalidPayloadController = createPkceConfirmationController({
+  exchangeAuthorizationCode: async () => ({ data: { confirmed: true }, error: null }),
+  onDiagnostic: payloadDiagnostics.observe,
+});
+assert.deepEqual(await invalidPayloadController.process({
+  preparedCallback: { kind: 'token-hash', authorizationCode: '', scrubbed: true },
+}), {
+  status: CONFIRMATION_STATUS.UNAVAILABLE,
+  message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+});
+assert.deepEqual(payloadDiagnostics.events, [
+  { stage: CALLBACK_DIAGNOSTIC_STAGE.CALLBACK_PAYLOAD },
+]);
+
+const exchangeDiagnostics = diagnosticCollector();
+const failedExchange = createPkceCodeExchangeAdapter({
+  auth: { exchangeCodeForSession: async () => ({ data: null, error: new Error('PRIVATE_PROVIDER_ERROR') }) },
+}, { onDiagnostic: exchangeDiagnostics.observe });
+assert.deepEqual(await failedExchange('diagnostic-exchange-code'), { data: null, error: true });
+assert.deepEqual(exchangeDiagnostics.events, [
+  { stage: CALLBACK_DIAGNOSTIC_STAGE.PKCE_EXCHANGE },
+]);
+
+const sessionDiagnostics = diagnosticCollector();
+const malformedSessionExchange = createPkceCodeExchangeAdapter({
+  auth: { exchangeCodeForSession: async () => ({ data: { session: {} }, error: null }) },
+}, { onDiagnostic: sessionDiagnostics.observe });
+assert.deepEqual(await malformedSessionExchange('diagnostic-session-code'), { data: null, error: true });
+assert.deepEqual(sessionDiagnostics.events, [
+  { stage: CALLBACK_DIAGNOSTIC_STAGE.SESSION_VALIDATION },
+]);
+
+const confirmationDiagnostics = diagnosticCollector();
+const unconfirmedExchange = createPkceCodeExchangeAdapter({
+  auth: {
+    exchangeCodeForSession: async () => ({
+      data: { session: { ...confirmedSession(), user: { id: 'offline-unconfirmed-user', email_confirmed_at: null } } },
+      error: null,
+    }),
+  },
+}, { onDiagnostic: confirmationDiagnostics.observe });
+assert.deepEqual(await unconfirmedExchange('diagnostic-confirmation-code'), { data: null, error: true });
+assert.deepEqual(confirmationDiagnostics.events, [
+  { stage: CALLBACK_DIAGNOSTIC_STAGE.EMAIL_CONFIRMATION },
+]);
+
+const signOutDiagnostics = diagnosticCollector();
+const failedSignOutOrchestration = createManualLoginConfirmationOrchestration({
+  client: {
+    auth: {
+      exchangeCodeForSession: async () => ({ data: { session: confirmedSession() }, error: null }),
+      signOut: async () => ({ error: new Error('PRIVATE_SIGN_OUT_ERROR') }),
+    },
+  },
+  preparedCallback: { kind: 'pkce', authorizationCode: 'diagnostic-sign-out-code', scrubbed: true },
+  onDiagnostic: signOutDiagnostics.observe,
+});
+assert.deepEqual(await failedSignOutOrchestration.activate(), {
+  status: CONFIRMATION_STATUS.UNAVAILABLE,
+  message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+});
+assert.deepEqual(signOutDiagnostics.events, [
+  { stage: CALLBACK_DIAGNOSTIC_STAGE.LOCAL_SIGN_OUT },
+]);
+
+const readinessDiagnostics = diagnosticCollector();
+const unavailableLiveActivation = createLiveCallbackPageActivation({
+  pageInitialization: {
+    initialize: async () => CALLBACK_CLIENT_STATE.UNAVAILABLE,
+    createConfirmationComposition() {
+      throw new Error('PRIVATE_COMPOSITION_MUST_NOT_RUN');
+    },
+  },
+  onDiagnostic: readinessDiagnostics.observe,
+});
+assert.deepEqual(await unavailableLiveActivation.activate(), {
+  status: CONFIRMATION_STATUS.UNAVAILABLE,
+  message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+});
+assert.deepEqual(readinessDiagnostics.events, [
+  { stage: CALLBACK_DIAGNOSTIC_STAGE.CLIENT_READINESS },
+]);
+
+const diagnosticOutput = JSON.stringify([
+  ...payloadDiagnostics.events,
+  ...exchangeDiagnostics.events,
+  ...sessionDiagnostics.events,
+  ...confirmationDiagnostics.events,
+  ...signOutDiagnostics.events,
+  ...readinessDiagnostics.events,
+]);
+assert.doesNotMatch(diagnosticOutput, /PRIVATE_PROVIDER_ERROR|PRIVATE_SIGN_OUT_ERROR|offline-fake|diagnostic-.*-code/i);
+assert.doesNotThrow(() => {
+  createPkceConfirmationController({
+    onDiagnostic() { throw new Error('PRIVATE_OBSERVER_ERROR'); },
+  }).process({ preparedCallback: { kind: 'invalid', authorizationCode: '', scrubbed: true } });
+});
 
 const adapterSource = await readFile(new URL('../js/auth-callback-exchange.js', import.meta.url), 'utf8');
 assert.doesNotMatch(adapterSource, /console\.|localStorage|sessionStorage|\bfetch\s*\(|XMLHttpRequest|WebSocket/);

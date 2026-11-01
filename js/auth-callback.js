@@ -13,6 +13,28 @@ export const CONFIRMATION_MESSAGES = Object.freeze({
   UNAVAILABLE: 'This confirmation link could not be processed. Return to sign in or registration to continue.',
 });
 
+export const CALLBACK_DIAGNOSTIC_STAGE = Object.freeze({
+  CLIENT_READINESS: 'client-readiness',
+  CALLBACK_PAYLOAD: 'callback-payload-classification',
+  PKCE_EXCHANGE: 'pkce-code-exchange',
+  SESSION_VALIDATION: 'session-validation',
+  EMAIL_CONFIRMATION: 'email-confirmation-evidence',
+  LOCAL_SIGN_OUT: 'temporary-local-sign-out',
+});
+
+export function reportCallbackDiagnostic(observer, stage) {
+  if (typeof observer !== 'function' || !Object.values(CALLBACK_DIAGNOSTIC_STAGE).includes(stage)) {
+    return false;
+  }
+
+  try {
+    observer(Object.freeze({ stage }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function hasKey(params, keys) {
   return [...keys].some((key) => params.has(key));
 }
@@ -100,7 +122,7 @@ export function prepareAuthCallbackRequest(locationLike, historyLike) {
   });
 }
 
-export function createPkceConfirmationController({ exchangeAuthorizationCode } = {}) {
+export function createPkceConfirmationController({ exchangeAuthorizationCode, onDiagnostic } = {}) {
   let processingPromise;
 
   return Object.freeze({
@@ -109,6 +131,7 @@ export function createPkceConfirmationController({ exchangeAuthorizationCode } =
 
       const callbackRequest = preparedCallback || prepareAuthCallbackRequest(location, history);
       if (!callbackRequest.scrubbed || callbackRequest.kind !== 'pkce' || !callbackRequest.authorizationCode) {
+        reportCallbackDiagnostic(onDiagnostic, CALLBACK_DIAGNOSTIC_STAGE.CALLBACK_PAYLOAD);
         processingPromise = Promise.resolve(Object.freeze({
           status: CONFIRMATION_STATUS.UNAVAILABLE,
           message: CONFIRMATION_MESSAGES.UNAVAILABLE,
@@ -117,6 +140,7 @@ export function createPkceConfirmationController({ exchangeAuthorizationCode } =
       }
 
       if (typeof exchangeAuthorizationCode !== 'function') {
+        reportCallbackDiagnostic(onDiagnostic, CALLBACK_DIAGNOSTIC_STAGE.CLIENT_READINESS);
         processingPromise = Promise.resolve(Object.freeze({
           status: CONFIRMATION_STATUS.UNAVAILABLE,
           message: CONFIRMATION_MESSAGES.UNAVAILABLE,
