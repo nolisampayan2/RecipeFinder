@@ -42,6 +42,41 @@ assert.ok(Object.isFrozen(selected.catalog.list()));
 assert.ok(Object.isFrozen(selected.catalog.list()[0]));
 assert.ok(Object.isFrozen(selected.catalog.list()[0].ingredients));
 
+const threeLineInstructions = 'Prepare the ingredients.\nCook until tender.\nServe while warm.';
+const multilineSelection = composePublishedRecipeCatalog({
+  data: [databaseRecipe({ instructions: `  ${threeLineInstructions}  ` })],
+  error: null,
+});
+assert.equal(multilineSelection.origin, 'database');
+assert.equal(
+  multilineSelection.catalog.getById('database-only-recipe')?.instructions,
+  threeLineInstructions
+);
+
+const normalizedLineEndings = composePublishedRecipeCatalog({
+  data: [databaseRecipe({ instructions: 'First line.\r\nSecond line.\rThird line.' })],
+  error: null,
+});
+assert.equal(
+  normalizedLineEndings.catalog.getById('database-only-recipe')?.instructions,
+  'First line.\nSecond line.\nThird line.'
+);
+
+for (const instructions of [
+  '\n  \r\n ',
+  'Prepare.\u0000Serve.',
+  'Prepare.\u007fServe.',
+  'Prepare.\tServe.',
+  'Prepare.\u000cServe.',
+]) {
+  const rejectedInstructions = composePublishedRecipeCatalog({
+    data: [databaseRecipe({ instructions })],
+    error: null,
+  });
+  assert.equal(rejectedInstructions.catalog, recipeCatalog);
+  assert.equal(rejectedInstructions.databaseStatus, 'invalid');
+}
+
 const mutableInput = databaseRecipe();
 const immutableSelection = composePublishedRecipeCatalog({ data: [mutableInput], error: null });
 mutableInput.name = 'Changed after composition';
@@ -300,6 +335,10 @@ assert.deepEqual(
   ['seed-pipeline-recipe', 'external:curated:84']
 );
 assert.equal(pipelineSelection.catalog.getById('external:curated:84')?.source, 'database');
+assert.equal(
+  pipelineSelection.catalog.getById('seed-pipeline-recipe')?.instructions,
+  'Prepare and serve.'
+);
 
 let fetchCalls = 0;
 const originalFetch = globalThis.fetch;

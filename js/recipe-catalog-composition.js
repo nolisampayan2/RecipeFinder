@@ -4,6 +4,7 @@ import { safeExternalUrl, safeImageUrl } from './security.js';
 const DATABASE_SOURCE_TYPES = new Set(['seed', 'cms', 'external']);
 const RECIPE_ID = /^[a-z0-9][a-z0-9:_-]{0,199}$/;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+const DISALLOWED_INSTRUCTION_CONTROLS = /[\u0000-\u0009\u000b-\u001f\u007f]/;
 const ABSOLUTE_SCHEME = /^[a-zA-Z][a-zA-Z\d+.-]*:/;
 const DATABASE_LOCAL_IMAGE = /^(?:\.\/|\/(?:[a-zA-Z\d_-]+\/)*)?assets\/[a-zA-Z\d][a-zA-Z\d._~%-]*(?:\/[a-zA-Z\d][a-zA-Z\d._~%-]*)*$/;
 const REQUIRED_RECIPE_FIELDS = Object.freeze([
@@ -47,6 +48,17 @@ function meaningfulText(value) {
     && value === value.trim()
     && Boolean(value)
     && !CONTROL_CHARACTERS.test(value);
+}
+
+function validatedInstructions(value) {
+  if (typeof value !== 'string') {
+    throw new TypeError('Invalid database recipe instructions.');
+  }
+  const normalized = value.replace(/\r\n?/g, '\n').trim();
+  if (!normalized || DISALLOWED_INSTRUCTION_CONTROLS.test(normalized)) {
+    throw new TypeError('Invalid database recipe instructions.');
+  }
+  return normalized;
 }
 
 function validatedImage(value, { optional = false } = {}) {
@@ -123,7 +135,7 @@ function validatedDatabaseRecipe(recipe) {
   const fallbackImage = recipe.fallbackImage;
   const description = recipe.description;
   const ingredients = recipe.ingredients;
-  const instructions = recipe.instructions;
+  const instructions = validatedInstructions(recipe.instructions);
   const tutorial = recipe.tutorial;
 
   if (!meaningfulText(id) || !RECIPE_ID.test(id)) throw new TypeError('Invalid database recipe ID.');
@@ -135,7 +147,6 @@ function validatedDatabaseRecipe(recipe) {
     || !meaningfulText(category)
     || !meaningfulText(cuisine)
     || !meaningfulText(description)
-    || !meaningfulText(instructions)
   ) {
     throw new TypeError('Invalid database recipe text.');
   }

@@ -59,6 +59,21 @@ assert.ok(Object.isFrozen(successful));
 assert.ok(Object.isFrozen(successful.catalog.list()[0]));
 assert.deepEqual(successfulClient.calls.map(([operation]) => operation), ['from', 'select', 'eq', 'order']);
 
+const multilineInstructions = 'Prepare the ingredients.\nCook until tender.\nServe while warm.';
+const multilineLoader = createDashboardRecipeCatalogLoader({
+  client: fakeClient({
+    data: [rawRecipe({ instructions: `\r\n${multilineInstructions.replaceAll('\n', '\r\n')}\r\n` })],
+    error: null,
+  }).client,
+});
+const multilineResult = await multilineLoader.load();
+assert.equal(multilineResult.origin, 'database');
+assert.equal(multilineResult.databaseStatus, 'success');
+assert.equal(
+  multilineResult.catalog.getById('database-loader-recipe')?.instructions,
+  multilineInstructions
+);
+
 const curatedClient = fakeClient({
   data: [rawRecipe({
     id: 'external:curated:loader',

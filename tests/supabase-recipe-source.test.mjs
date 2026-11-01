@@ -79,6 +79,33 @@ assert.ok(Object.isFrozen(normalized));
 assert.ok(Object.isFrozen(normalized.ingredients));
 assert.ok(Object.isFrozen(normalized.ingredients[0]));
 
+const threeLineInstructions = 'Prepare the ingredients.\nCook until tender.\nServe while warm.';
+const multiline = normalizePublishedRecipeRow(validRow({
+  instructions: `  ${threeLineInstructions}  `,
+}));
+assert.equal(multiline.instructions, threeLineInstructions);
+assert.equal(
+  normalizePublishedRecipeRow(validRow({ instructions: 'First line.\r\nSecond line.\rThird line.' })).instructions,
+  'First line.\nSecond line.\nThird line.'
+);
+assert.equal(
+  normalizePublishedRecipeRow(validRow({ instructions: 'Prepare and serve.' })).instructions,
+  'Prepare and serve.'
+);
+
+for (const instructions of [
+  '\n  \r\n ',
+  'Prepare.\u0000Serve.',
+  'Prepare.\u007fServe.',
+  'Prepare.\tServe.',
+  'Prepare.\u000bServe.',
+]) {
+  assert.throws(
+    () => normalizePublishedRecipeRow(validRow({ instructions })),
+    (error) => error instanceof TypeError && error.message === 'instructions must be meaningful text.'
+  );
+}
+
 const external = normalizePublishedRecipeRow(validRow({
   id: 'external:curated:42',
   source_type: 'external',
@@ -250,5 +277,20 @@ assert.equal(fetchCalls, 0);
 const source = await readFile(new URL('../js/supabase-recipe-source.js', import.meta.url), 'utf8');
 assert.doesNotMatch(source, /service.?role|sb_secret_|supabase-config|createClient|innerHTML|insertAdjacentHTML|localStorage|sessionStorage|console\./i);
 assert.doesNotMatch(source, /\bfetch\s*\(|XMLHttpRequest|WebSocket/);
+
+const seedSql = await readFile(new URL('../supabase/seed.sql', import.meta.url), 'utf8');
+const seedInstructions = Array.from(
+  seedSql.matchAll(/\$instructions\$([\s\S]*?)\$instructions\$/g),
+  (match) => match[1]
+);
+assert.equal(seedInstructions.length, 10);
+for (let index = 0; index < seedInstructions.length; index += 1) {
+  const seedNormalized = normalizePublishedRecipeRow(validRow({
+    id: `seed-instructions-${index + 1}`,
+    instructions: seedInstructions[index],
+  }));
+  assert.equal(seedNormalized.instructions.split('\n').length, 3);
+  assert.equal(seedNormalized.instructions.includes('\r'), false);
+}
 
 console.log('Offline Supabase published recipe source tests passed with fake clients only.');
