@@ -153,7 +153,7 @@ function extractFunction(name) {
 
 const lifecycleFactory = Function(
   'externalSourceRegistry', 'openRecipeLoading', 'openRecipeDetails', 'openRecipeError',
-  'isRecipeModalOpen', 'closeRecipeModal', 'openRecipe', 'dashboardCatalog', 'initialRecipeMode',
+  'isRecipeModalOpen', 'closeRecipeModal', 'openRecipe', 'dashboardCatalog', 'liveDashboard', 'initialRecipeMode',
   `let externalDetailGeneration = 0;
    let recipeMode = initialRecipeMode;
    ${extractFunction('invalidateExternalDetails')}
@@ -188,12 +188,16 @@ function createLifecycleHarness() {
   const actions = lifecycleFactory(
     registry,
     () => { modalOpen = true; events.push('loading'); },
-    (recipe) => { events.push(`external:${recipe.id}`); },
+    (recipe) => {
+      modalOpen = true;
+      events.push(recipe.source === 'external' ? `external:${recipe.id}` : `demo:${recipe.id}`);
+    },
     () => { events.push('error'); },
     () => modalOpen,
     () => { modalOpen = false; events.push('close'); },
     (id) => { modalOpen = true; events.push(`demo:${id}`); return true; },
-    { getById: () => null },
+    { getById: (id) => ({ id, name: 'Catalog recipe' }) },
+    null,
     'offline',
   );
   return { actions, events, requests };
@@ -234,7 +238,13 @@ assert.equal(navigationRace.events.at(-1), 'close', 'Navigation invalidation mus
 let liveRegistryHydrations = 0;
 let liveModalOpen = false;
 let currentLiveRecipe = liveRecipe;
+let currentLiveStatus = 'ready';
 const liveEvents = [];
+const collidingDatabaseRecipe = {
+  ...liveRecipe,
+  source: 'database',
+  databaseSourceType: 'external',
+};
 const liveActions = lifecycleFactory(
   {
     invalidateDetails() { liveEvents.push('invalidate'); },
@@ -246,11 +256,13 @@ const liveActions = lifecycleFactory(
   () => liveModalOpen,
   () => { liveModalOpen = false; liveEvents.push('close'); },
   () => false,
-  { getById: (id) => id === currentLiveRecipe.id ? currentLiveRecipe : null },
+  { getById: (id) => id === collidingDatabaseRecipe.id ? collidingDatabaseRecipe : null },
+  { getState: () => ({ status: currentLiveStatus, recipes: currentLiveRecipe ? [currentLiveRecipe] : [] }) },
   'live',
 );
 assert.equal(await liveActions.openExternalRecipe(liveRecipe.id, trigger), true);
 assert.equal(liveEvents.at(-1), `live:${liveRecipe.id}`);
+assert.equal(collidingDatabaseRecipe.source, 'database', 'The colliding primary-catalog recipe must remain unchanged');
 assert.equal(liveRegistryHydrations, 0, 'Opening live details must not use registry hydration');
 assert.equal(liveEvents.includes('loading'), false, 'In-memory live details must not show a network loading state');
 currentLiveRecipe = { ...liveRecipe, detailLevel: 'summary' };
@@ -258,6 +270,14 @@ assert.equal(await liveActions.openExternalRecipe(liveRecipe.id, trigger), false
 currentLiveRecipe = liveRecipe;
 assert.equal(await liveActions.openExternalRecipe('external:themealdb:99999', trigger), false, 'Unknown live IDs must fail closed');
 assert.equal(await liveActions.openExternalRecipe('external:themealdb:not-digits', trigger), false, 'Malformed live IDs must fail closed');
+currentLiveRecipe = null;
+assert.equal(await liveActions.openExternalRecipe(liveRecipe.id, trigger), false, 'Removed live records must fail closed');
+currentLiveRecipe = { ...liveRecipe, id: 'external:themealdb:52773', externalId: '52773' };
+assert.equal(await liveActions.openExternalRecipe(liveRecipe.id, trigger), false, 'A replacement search must invalidate older live IDs');
+currentLiveRecipe = liveRecipe;
+currentLiveStatus = 'loading';
+assert.equal(await liveActions.openExternalRecipe(liveRecipe.id, trigger), false, 'Replaced live snapshots must fail closed until ready');
+currentLiveStatus = 'ready';
 assert.equal(liveRegistryHydrations, 0);
 liveActions.invalidateExternalDetails({ closeModal: true, restoreFocus: false });
 assert.equal(liveEvents.at(-1), 'close', 'Navigation reset must close live details');
@@ -271,9 +291,26 @@ const offlineLiveActions = lifecycleFactory(
   () => {},
   () => false,
   { getById: () => liveRecipe },
+  { getState: () => ({ status: 'ready', recipes: [liveRecipe] }) },
   'offline',
 );
 assert.equal(await offlineLiveActions.openExternalRecipe(liveRecipe.id, trigger), false, 'Live mode is required');
+
+let openedDatabaseCollision = null;
+const offlineCollisionActions = lifecycleFactory(
+  { invalidateDetails() {}, getDetails() { throw new Error('Database recipes must not hydrate'); } },
+  () => false,
+  (recipe) => { openedDatabaseCollision = recipe; return true; },
+  () => false,
+  () => false,
+  () => {},
+  () => false,
+  { getById: (id) => id === collidingDatabaseRecipe.id ? collidingDatabaseRecipe : null },
+  null,
+  'offline',
+);
+assert.equal(offlineCollisionActions.openDemoRecipe(collidingDatabaseRecipe.id, trigger), true);
+assert.equal(openedDatabaseCollision, collidingDatabaseRecipe, 'The database-owned collision must remain available outside live mode');
 
 assert.match(appSource, /if \(event\.target\.closest\('\[data-close\]'\)\) closeActiveRecipeModal\(\)/);
 assert.match(appSource, /if \(isRecipeModalOpen\(\)\)[\s\S]*?closeActiveRecipeModal\(\)/);

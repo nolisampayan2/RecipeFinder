@@ -29,7 +29,8 @@ const index = await readFile(new URL('index.html', root), 'utf8');
 assert.match(index, /class="sidebar-promo"[\s\S]*?<button data-scroll="recommended">Explore now →<\/button>/);
 assert.match(index, /<button class="primary" data-scroll="recommended">Explore recipes/);
 assert.match(index, /data-dashboard-auth[\s\S]*?data-auth-sign-in[\s\S]*?data-auth-logout/);
-assert.match(index, /<script type="module" src="app\.js"><\/script>[\s\S]*?<script type="module" src="js\/dashboard-auth\.js"><\/script>/);
+assert.match(index, /<script type="module" src="app\.js"><\/script>/);
+assert.doesNotMatch(index, /<script type="module" src="js\/dashboard-auth\.js"><\/script>/);
 
 const app = await readFile(new URL('app.js', root), 'utf8');
 const resetExternalDiscovery = app.match(/function resetExternalDiscovery[\s\S]*?\n\}/)?.[0] || '';
@@ -140,6 +141,7 @@ assert.match(navigation, /mobileSidebarQuery\.addEventListener\('change'/);
 assert.match(navigation, /if \(!event\.matches\) setSidebarOpen\(false\)/);
 
 assert.doesNotMatch(app, /window\.scrollTo|history\.pushState|addEventListener\(['"](?:hashchange|popstate)/);
+assert.match(app, /liveState\?\.status !== 'ready'/);
 
 assert.doesNotMatch(app, /innerHTML\s*=|insertAdjacentHTML|document\.write/);
 assert.doesNotMatch(app, /fetch\s*\(|XMLHttpRequest|WebSocket|signUp|signIn|exchangeCodeForSession/);

@@ -5,7 +5,6 @@ import {
   closeRecipeModal,
   handleRecipeModalTab,
   isRecipeModalOpen,
-  openRecipe,
   openRecipeDetails,
   openRecipeError,
   openRecipeLoading,
@@ -14,6 +13,8 @@ import { initializeCategoryCarousel, toggleCategoriesExpansion } from './js/cate
 import { createFictionalExternalRecipeController } from './js/fictional-external-recipe-source.js';
 import { createExternalSourceRegistry } from './js/external-source-registry.js';
 import { createLiveMealDbDashboard } from './js/live-mealdb-dashboard.js';
+import { createDashboardAuthIntegration } from './js/dashboard-auth.js';
+import { createDashboardRecipeCatalogLoader } from './js/dashboard-recipe-catalog-loader.js';
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -23,12 +24,16 @@ const externalRecipeController = createFictionalExternalRecipeController();
 const externalSourceRegistry = createExternalSourceRegistry({
   controllers: { 'fictional-offline': externalRecipeController },
 });
-let dashboardCatalog = recipeCatalog;
+let primaryCatalog = recipeCatalog;
+let dashboardCatalog = primaryCatalog;
 let lastExternalOperation = null;
 let externalDetailGeneration = 0;
 let liveDashboard = null;
 let recipeMode = 'offline';
 let searchSource = 'offline';
+let dashboardAuth = null;
+let recipeCatalogLoader = null;
+let pageRetired = false;
 
 function setSearchSource(source) {
   searchSource = source === 'online' ? 'online' : 'offline';
@@ -56,7 +61,8 @@ function closeActiveRecipeModal() {
 
 function openDemoRecipe(id, trigger) {
   invalidateExternalDetails();
-  return openRecipe(id, { trigger });
+  const recipe = dashboardCatalog.getById(id);
+  return recipe ? openRecipeDetails(recipe, { trigger }) : false;
 }
 
 async function openExternalRecipe(id, trigger) {
@@ -64,7 +70,25 @@ async function openExternalRecipe(id, trigger) {
   const isMealDbIdentity = typeof id === 'string' && id.startsWith('external:themealdb:');
   if (recipeMode === 'live' || isMealDbIdentity) {
     if (recipeMode !== 'live' || !/^external:themealdb:\d+$/.test(id)) return false;
-    const recipe = dashboardCatalog.getById(id);
+    let recipe = null;
+    try {
+      if (typeof liveDashboard === 'undefined') {
+        // Supports isolated offline harnesses; the production module always owns liveDashboard.
+        recipe = dashboardCatalog.getById(id);
+      } else {
+        const liveState = liveDashboard?.getState();
+        if (liveState?.status !== 'ready' || !Array.isArray(liveState.recipes)) return false;
+        for (let index = 0; index < liveState.recipes.length; index += 1) {
+          const candidate = liveState.recipes[index];
+          if (candidate?.id === id) {
+            recipe = candidate;
+            break;
+          }
+        }
+      }
+    } catch {
+      return false;
+    }
     if (
       recipe?.id !== id
       || recipe.source !== 'external'
@@ -97,11 +121,45 @@ function renderDashboard() {
   render(dashboardCatalog, externalState);
 }
 
+function catalogWithExternalRecipes(baseCatalog, externalState) {
+  if (externalState?.status !== 'ready' || !externalState.recipes?.length) return baseCatalog;
+  try {
+    return baseCatalog.withRecipes(externalState.recipes);
+  } catch {
+    return baseCatalog;
+  }
+}
+
+function applyPrimaryCatalogResult(result) {
+  try {
+    if (pageRetired || result?.stale || !result?.catalog) return false;
+    primaryCatalog = result.catalog;
+    const externalState = recipeMode === 'live' && liveDashboard
+      ? liveDashboard.getState()
+      : externalRecipeController.getState();
+    dashboardCatalog = catalogWithExternalRecipes(primaryCatalog, externalState);
+    render(dashboardCatalog, externalState);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acceptDashboardClient(client) {
+  if (pageRetired || recipeCatalogLoader) return false;
+  try {
+    recipeCatalogLoader = createDashboardRecipeCatalogLoader({ client });
+    void recipeCatalogLoader.load().then(applyPrimaryCatalogResult, () => false);
+    return true;
+  } catch {
+    recipeCatalogLoader = null;
+    return false;
+  }
+}
+
 function synchronizeLiveRecipes(liveState) {
   if (recipeMode !== 'live') return;
-  dashboardCatalog = liveState.status === 'ready' && liveState.recipes.length
-    ? recipeCatalog.withRecipes(liveState.recipes)
-    : recipeCatalog;
+  dashboardCatalog = catalogWithExternalRecipes(primaryCatalog, liveState);
   render(dashboardCatalog, liveState);
 }
 
@@ -119,16 +177,14 @@ function exitLiveMode() {
   if (recipeMode !== 'live') return false;
   recipeMode = 'offline';
   liveDashboard?.reset();
-  dashboardCatalog = recipeCatalog;
+  dashboardCatalog = primaryCatalog;
   return true;
 }
 
 function synchronizeExternalRecipes() {
   if (recipeMode !== 'offline') return;
   const externalState = externalRecipeController.getState();
-  dashboardCatalog = externalState.status === 'ready' && externalState.recipes.length
-    ? recipeCatalog.withRecipes(externalState.recipes)
-    : recipeCatalog;
+  dashboardCatalog = catalogWithExternalRecipes(primaryCatalog, externalState);
   renderDashboard();
 }
 
@@ -136,7 +192,7 @@ function resetExternalDiscovery({ clearRetry = true, resetSource = true } = {}) 
   exitLiveMode();
   invalidateExternalDetails({ closeModal: true, restoreFocus: false });
   externalRecipeController.invalidateCollection();
-  dashboardCatalog = recipeCatalog;
+  dashboardCatalog = primaryCatalog;
   if (clearRetry) lastExternalOperation = null;
   if (resetSource) setSearchSource('offline');
 }
@@ -393,7 +449,11 @@ function initializePageActions() {
     }
 
     if (event.target.closest('.surprise-btn')) {
-      const recipes = recipeCatalog.list();
+      const recipes = primaryCatalog.list();
+      if (!recipes.length) {
+        showToast('No recipes are currently available');
+        return;
+      }
       const randomRecipe = recipes[Math.floor(Math.random() * recipes.length)];
       openDemoRecipe(randomRecipe.id, event.target.closest('.surprise-btn'));
     }
@@ -460,3 +520,17 @@ function initializeApp() {
 }
 
 initializeApp();
+
+try {
+  dashboardAuth = createDashboardAuthIntegration({ onClientReady: acceptDashboardClient });
+  void dashboardAuth.activate();
+} catch {
+  // Account and database availability must not interrupt guest discovery.
+}
+
+window.addEventListener('pagehide', () => {
+  if (pageRetired) return;
+  pageRetired = true;
+  recipeCatalogLoader?.cleanup();
+  dashboardAuth?.cleanup();
+}, { once: true });

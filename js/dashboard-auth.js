@@ -97,12 +97,14 @@ export function createDashboardAuthIntegration(options = {}) {
   let sdk;
   let createClientOwner;
   let createSessionService;
+  let onClientReady;
   try {
     documentLike = options?.documentLike ?? globalThis.document;
     loadConfig = options?.loadConfig ?? loadLocalPublicConfig;
     sdk = options?.sdk ?? globalThis.supabase;
     createClientOwner = options?.createClientOwner ?? createSupabasePageClientOwner;
     createSessionService = options?.createSessionService ?? createAuthSessionService;
+    onClientReady = options?.onClientReady;
   } catch {
     throw new TypeError('Dashboard authentication initialization failed.');
   }
@@ -117,6 +119,7 @@ export function createDashboardAuthIntegration(options = {}) {
   let retired = false;
   let logoutInstalled = false;
   let renderingAvailable = true;
+  let clientReadyNotified = false;
 
   const publish = (state, expectedGeneration = generation) => {
     if (retired || expectedGeneration !== generation) return false;
@@ -186,6 +189,10 @@ export function createDashboardAuthIntegration(options = {}) {
             }
             const client = owner.initialize(SUPABASE_CLIENT_PROFILE.APPLICATION_SESSION);
             if (retired || activationGeneration !== generation) return false;
+            if (!clientReadyNotified && typeof onClientReady === 'function') {
+              clientReadyNotified = true;
+              try { onClientReady(client); } catch { /* Additive consumers cannot break Auth. */ }
+            }
             service = createSessionService(client);
             unsubscribe = service.subscribe((state) => publish(state, activationGeneration));
             if (!logoutInstalled) {
@@ -229,13 +236,4 @@ export function createDashboardAuthIntegration(options = {}) {
       return true;
     },
   });
-}
-
-if (typeof document !== 'undefined') {
-  try {
-    const dashboardAuth = createDashboardAuthIntegration();
-    void dashboardAuth.activate();
-  } catch {
-    // Dashboard Auth is additive and must not interrupt recipe discovery.
-  }
 }

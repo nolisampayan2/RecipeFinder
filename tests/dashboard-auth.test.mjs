@@ -108,7 +108,10 @@ function createIntegration(fake, ui = createFakeDocument(), overrides = {}) {
 }
 
 const guest = createFakeClient();
-const guestHarness = createIntegration(guest);
+const readyClients = [];
+const guestHarness = createIntegration(guest, createFakeDocument(), {
+  onClientReady(client) { readyClients.push(client); },
+});
 assert.equal(guestHarness.ui.root.dataset.authState, undefined, 'Construction must be inert');
 const guestActivation = guestHarness.integration.activate();
 assert.equal(guestHarness.integration.activate(), guestActivation, 'Duplicate activation must share one promise');
@@ -118,7 +121,13 @@ assert.equal(guestHarness.ui.identity.textContent, 'Guest');
 assert.equal(guestHarness.ui.signIn.hidden, false);
 assert.equal(guestHarness.ui.logout.hidden, true);
 assert.equal(guestHarness.clientCreations(), 1);
+assert.deepEqual(readyClients, [guest.client]);
 assert.deepEqual(guest.counts, { getSession: 1, subscribe: 1, unsubscribe: 0, signOut: 0 });
+
+const throwingReadyCallback = createIntegration(createFakeClient(), createFakeDocument(), {
+  onClientReady() { throw new Error('PRIVATE_CLIENT_READY_ERROR'); },
+});
+assert.equal(await throwingReadyCallback.integration.activate(), true, 'Client-ready failures must not break Auth');
 
 const restoration = deferred();
 const confirmed = createFakeClient({ getSession: () => restoration.promise });
@@ -336,9 +345,12 @@ assert.match(index, /data-dashboard-auth/);
 assert.match(index, /data-auth-message role="status" aria-live="polite" aria-atomic="true"/);
 assert.match(index, /@supabase\/supabase-js@2\.118\.0\/dist\/umd\/supabase\.js/);
 assert.match(index, /integrity="sha384-TcHRA3zBbn\+Lexh5n\+Oil4guNPOS3rjNDpGRAN46u\/s\/mB2IZ50ceC6TYDU2yvgK"/);
-assert.match(index, /<script type="module" src="app\.js"><\/script>[\s\S]*?<script type="module" src="js\/dashboard-auth\.js"><\/script>/);
+assert.match(index, /<script type="module" src="app\.js"><\/script>/);
+assert.doesNotMatch(index, /<script type="module" src="js\/dashboard-auth\.js"><\/script>/);
 
 const app = await readFile(new URL('../app.js', import.meta.url), 'utf8');
-assert.doesNotMatch(app, /dashboard-auth|createAuthSessionService|supabase/i, 'Recipe discovery must remain independent of dashboard Auth');
+assert.match(app, /createDashboardAuthIntegration/);
+assert.match(app, /onClientReady: acceptDashboardClient/);
+assert.equal((app.match(/\.activate\(\)/g) || []).length, 1, 'Dashboard Auth must activate exactly once');
 
 console.log('Offline dashboard authentication integration tests passed with fake clients only.');
