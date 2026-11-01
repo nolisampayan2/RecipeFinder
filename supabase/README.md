@@ -377,15 +377,24 @@ test fixtures, or chat. Although publishable/anon keys are designed for browser
 use, RLS remains the authorization boundary and the values remain environment
 specific.
 
-#### Proposed Vercel delivery strategy — not implemented
+#### Vercel public-configuration generator — implemented offline, not deployed
 
-The preferred future approach is a reviewed build step that reads Preview-scoped
-`SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` variables, validates them with the
-same public configuration rules, and generates `js/supabase-config.js` only in
-the deployment artifact. The repository currently has no package/build script,
-so this mechanism does not exist yet. Do not assume Vercel environment variables
-are automatically available to static browser modules. A separate batch must
-design, test, and authorize the generator before any Preview deployment.
+`scripts/generate-supabase-config.mjs` is the reviewed build-time generator. It
+reads `SUPABASE_URL` plus exactly one of `SUPABASE_PUBLISHABLE_KEY` or the legacy
+`SUPABASE_ANON_KEY`, validates them with the same browser configuration rules,
+and exclusively creates the ignored `js/supabase-config.js` file. It refuses to
+overwrite an existing local file and never reads or renders unrelated environment
+variables. Run it only in an approved build environment:
+
+```text
+node scripts/generate-supabase-config.mjs
+```
+
+The generated module is expected to be publicly downloadable by browsers, so it
+must contain only the Project URL and publishable/anon key. Vercel environment
+scope, build command, output directory, Preview deployment, and callback routes
+remain unconfigured and require separate authorization. Do not assume Vercel
+environment variables are automatically available to static browser modules.
 
 ### Foundation migration prerequisites
 
