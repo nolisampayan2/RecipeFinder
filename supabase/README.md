@@ -2,6 +2,223 @@
 
 Phase 2B creates local design files only. Nothing in this directory has been applied to a database.
 
+## Batch 6B.4A disposable authentication readiness runbook
+
+This runbook prepares a later, separately authorized test against a disposable
+Supabase project. It does not authorize project creation, configuration changes,
+email delivery, SQL execution, account creation, deployment, or real Auth calls.
+
+### Current evidence boundary
+
+RecipeFinder's registration, login, email-confirmation callback, dashboard
+session restoration, and local logout entrypoints are connected in the browser.
+They have deterministic offline coverage using injected fake clients. The tests
+cover strict response envelopes, mandatory confirmed-email evidence, PKCE
+callback parsing and URL scrubbing, temporary-session containment, session
+expiry, Auth-event ordering, duplicate operations, error redaction, and cleanup.
+
+The following remain **not verified with a real provider**: public project
+configuration, email delivery and templates, redirect allowlisting, PKCE
+verifier continuity, browser storage and token refresh, multi-tab behavior,
+hosted routing, rate limits, migration compatibility, signup-trigger execution,
+seed behavior, grants, RLS, and administrative provisioning.
+
+### Authorization gates
+
+Stop and obtain explicit approval before each state-changing stage:
+
+1. Create or select a disposable Supabase project.
+2. Change Auth, email, URL, or rate-limit settings.
+3. create a local public configuration file or configure deployment variables.
+4. Apply the foundation migration or seed.
+5. Create accounts, send email, exchange a real code, sign in, or sign out.
+6. Provision an administrator or run database security tests.
+7. Create a Vercel Preview or any other deployment.
+
+Do not combine these gates into one implied authorization.
+
+### Disposable project checklist
+
+- [ ] Confirm the project is disposable and contains no production or personal data.
+- [ ] Record the project owner and deletion date outside the repository.
+- [ ] Use only a project URL and a browser-safe publishable/anon key in the frontend.
+- [ ] Never expose a secret key, `service_role` key, JWT secret, database password,
+      management token, SMTP credential, or trusted SQL connection string.
+- [ ] Enable mandatory email confirmation before the first registration test.
+- [ ] Keep automatic post-signup authentication disabled; RecipeFinder expects a
+      null signup session and requires manual login after confirmation.
+- [ ] Review email-template links, expiry, resend cooldowns, and Auth rate limits.
+- [ ] Configure exact redirect URLs only. Do not add wildcard origins for convenience.
+- [ ] Confirm the project can be deleted without affecting another environment.
+
+### Exact localhost routes
+
+Use the hostname `localhost`; do not switch to `127.0.0.1`, another hostname,
+HTTPS, a different port, or a different path during the PKCE round trip.
+
+| Purpose | Exact URL |
+| --- | --- |
+| Application/Site URL candidate | `http://localhost/RecipeFinder/` |
+| Registration | `http://localhost/RecipeFinder/register.html` |
+| Email-confirmation callback | `http://localhost/RecipeFinder/auth-callback.html` |
+| Manual login | `http://localhost/RecipeFinder/login.html` |
+| Dashboard | `http://localhost/RecipeFinder/index.html` |
+
+The exact callback URL above must be present in the disposable project's Auth
+redirect allowlist. It must not contain credentials, a query string, or a
+fragment when configured. Supabase adds the one-time callback parameters during
+the real flow; RecipeFinder captures and scrubs them on arrival.
+
+### Future HTTPS Vercel Preview routes
+
+No Preview hostname is assumed or approved by this document. After a Preview
+origin has actually been allocated and separately approved, use one immutable
+HTTPS origin consistently:
+
+- `https://<approved-preview-origin>/register.html`
+- `https://<approved-preview-origin>/auth-callback.html`
+- `https://<approved-preview-origin>/login.html`
+- `https://<approved-preview-origin>/index.html`
+
+Replace the placeholder only in the external environment checklist, not with a
+real hostname committed to this file. The callback must be the exact HTTPS
+same-origin `/auth-callback.html` route. Do not allow HTTP, credentials, query
+strings, fragments, arbitrary return URLs, branch-wide wildcards, or unrelated
+Vercel origins. Verify that direct requests to every `.html` route return the
+intended static page before allowing email delivery.
+
+### PKCE browser requirements
+
+- Registration and callback must run in the same browser profile and origin.
+- Do not use private browsing, clear site data, change hostnames, or switch
+  devices between signup and confirmation; those actions can remove the PKCE
+  verifier from persistent browser storage.
+- Open the confirmation link in the browser profile that initiated registration.
+- Process a callback code once only. Never reuse a captured or previously failed code.
+- The callback must scrub sensitive parameters before exchange and must not log,
+  copy, screenshot, or retain the authorization code.
+- Confirmation success still requires local sign-out of the temporary callback
+  session and a separate manual login.
+
+### Public browser configuration policy
+
+For localhost testing, the existing ignored `js/supabase-config.js` contract may
+contain only:
+
+```js
+export const SUPABASE_CONFIG = Object.freeze({
+  url: 'DISPOSABLE_PROJECT_URL',
+  publishableKey: 'DISPOSABLE_BROWSER_PUBLISHABLE_KEY',
+});
+```
+
+Create it from `js/supabase-config.example.js` only after approval. Do not commit
+the generated file or paste its values into issues, reports, screenshots, logs,
+test fixtures, or chat. Although publishable/anon keys are designed for browser
+use, RLS remains the authorization boundary and the values remain environment
+specific.
+
+#### Proposed Vercel delivery strategy — not implemented
+
+The preferred future approach is a reviewed build step that reads Preview-scoped
+`SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` variables, validates them with the
+same public configuration rules, and generates `js/supabase-config.js` only in
+the deployment artifact. The repository currently has no package/build script,
+so this mechanism does not exist yet. Do not assume Vercel environment variables
+are automatically available to static browser modules. A separate batch must
+design, test, and authorize the generator before any Preview deployment.
+
+### Foundation migration prerequisites
+
+- [ ] Use a fresh disposable project and inspect the entire migration before execution.
+- [ ] Confirm the migration targets the expected project and is run by a trusted owner.
+- [ ] Review every table, constraint, trigger, function owner, grant, revoke, and policy.
+- [ ] Confirm `private.handle_new_user()` remains owned by the trusted migration
+      owner, has an empty search path, and is executable only where documented.
+- [ ] Apply the foundation migration before creating the first test Auth user so
+      the signup trigger is exercised and no profile/role backfill is required.
+- [ ] Treat any signup-trigger error as a stop condition; do not bypass the trigger.
+- [ ] Apply `seed.sql` once only after the migration and security inspection pass.
+- [ ] Do not apply the migration or seed to an existing or production project.
+
+### Signup trigger and RLS verification
+
+After separately authorized migration application and account creation:
+
+- [ ] Exactly one `profiles` row is created for the new Auth user.
+- [ ] Exactly one `user_roles` row is created with role `user`.
+- [ ] No browser role can assign itself `admin` or mutate `user_roles`.
+- [ ] Anonymous access is limited to active taxonomy and published recipes.
+- [ ] An authenticated user can read/update only their own permitted profile fields.
+- [ ] A user can select, insert, and delete only their own Favorites.
+- [ ] Forged user IDs and access to another user's profile or Favorites are rejected.
+- [ ] Ordinary users cannot mutate recipes, categories, or cuisines or read drafts.
+- [ ] Administrator checks use the server-managed role and retain owner-scoped data rules.
+- [ ] Function, table, sequence, and schema privileges match the migration review.
+- [ ] Complete all negative tests later in this document before retaining the project.
+
+### Fictional test-account and inbox policy
+
+- Use a dedicated disposable test inbox controlled by the project operator, not a
+  personal, school, production, or third-party address.
+- Use fictional display names and unique inbox aliases for each scenario, such as
+  confirmed, unconfirmed, expired-link, and resend tests.
+- Keep the actual address and any provider access details outside the repository.
+- Never reuse a password from another account. Store no test password in source,
+  documentation, screenshots, logs, browser console output, or issue trackers.
+- Delete all test identities and inbox messages during cleanup.
+
+### Controlled real-authentication smoke test
+
+Run one scenario at a time and stop on the first security or configuration failure:
+
+1. Load guest discovery and verify local recipes and local Favorites still work.
+2. Open registration and confirm readiness before entering fictional credentials.
+3. Submit once; expect pending-confirmation feedback and no authenticated dashboard.
+4. Confirm receipt of one email with the exact approved callback origin.
+5. Open the link in the initiating browser profile; verify immediate URL scrubbing,
+   one PKCE exchange, verified-email evidence, and successful local sign-out.
+6. Return to manual login and verify unconfirmed or invalid attempts never navigate.
+7. Log in with the confirmed account; verify the fixed dashboard destination and
+   sanitized identity display.
+8. Refresh the dashboard and verify session restoration, valid expiry, and no raw data.
+9. Exercise duplicate tabs and Auth events; verify deterministic session state.
+10. Log out locally; verify Guest state, no stale identity, and preserved local Favorites.
+11. Test expired, replayed, malformed, and already-consumed callback links safely.
+12. Test missing/invalid public configuration and confirm guest discovery remains usable.
+
+Password recovery and Remember Me are not part of this smoke test; their current
+controls remain inactive or visual-only.
+
+### Redaction and evidence rules
+
+- Record only scenario name, timestamp, route, expected result, sanitized result,
+  and pass/fail status.
+- Never record passwords, authorization codes, access tokens, refresh tokens,
+  cookies, session objects, JWTs, full email links, provider exceptions, or keys.
+- Crop or redact browser screenshots before retention. Keep DevTools storage,
+  headers, request bodies, and query parameters out of reports.
+- Public UI must use text-only rendering and fixed generic errors.
+- A token, credential, or raw provider error in a URL, DOM node, log, screenshot,
+  report, or clipboard is an immediate stop condition.
+
+### Stop conditions, rollback, and cleanup
+
+Stop immediately if any of the following occurs:
+
+- The project, origin, callback, key type, browser profile, or database target is uncertain.
+- Signup returns an unexpected authenticated session or the temporary session cannot be cleared.
+- Email confirmation is bypassed, a callback is replayed, or an unapproved redirect is followed.
+- A token, credential, code, session, raw provider error, or another user's data is exposed.
+- A migration, trigger, grant, RLS policy, seed, or negative-security test differs from review.
+- Guest discovery or local Favorites are modified, uploaded, merged, or deleted.
+
+Rollback for this disposable phase means stop browser activity, close the test
+session, revoke/delete test users through trusted project controls, remove the
+local ignored configuration, and delete the disposable project after evidence is
+sanitized and retained. Do not improvise destructive SQL, weaken RLS, disable the
+signup trigger, reuse callback codes, or redirect testing to another environment.
+
 ## Intended order
 
 1. Review `migrations/202610270001_recipefinder_foundation.sql`.
