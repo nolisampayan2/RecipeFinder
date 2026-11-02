@@ -2,6 +2,7 @@ import {
   AUTH_SESSION_STATUS,
   createAuthSessionService,
 } from './auth-session.js';
+import { isValidAccountUserId } from './supabase-favorites.js';
 import { createSupabasePageClientOwner } from './supabase-browser.js';
 import { SUPABASE_CLIENT_PROFILE } from './supabase-client.js';
 
@@ -98,6 +99,7 @@ export function createDashboardAuthIntegration(options = {}) {
   let createClientOwner;
   let createSessionService;
   let onClientReady;
+  let onAuthStateChange;
   try {
     documentLike = options?.documentLike ?? globalThis.document;
     loadConfig = options?.loadConfig ?? loadLocalPublicConfig;
@@ -105,6 +107,7 @@ export function createDashboardAuthIntegration(options = {}) {
     createClientOwner = options?.createClientOwner ?? createSupabasePageClientOwner;
     createSessionService = options?.createSessionService ?? createAuthSessionService;
     onClientReady = options?.onClientReady;
+    onAuthStateChange = options?.onAuthStateChange;
   } catch {
     throw new TypeError('Dashboard authentication initialization failed.');
   }
@@ -121,10 +124,33 @@ export function createDashboardAuthIntegration(options = {}) {
   let renderingAvailable = true;
   let clientReadyNotified = false;
 
+  const notifyAuthState = (state) => {
+    if (retired || typeof onAuthStateChange !== 'function') return;
+    let status = AUTH_SESSION_STATUS.ERROR;
+    let userId = null;
+    try {
+      if (Object.values(AUTH_SESSION_STATUS).includes(state?.status)) status = state.status;
+      if (status === AUTH_SESSION_STATUS.AUTHENTICATED) {
+        const candidateUserId = state?.user?.id;
+        if (isValidAccountUserId(candidateUserId)) userId = candidateUserId;
+        else status = AUTH_SESSION_STATUS.ERROR;
+      }
+    } catch {
+      status = AUTH_SESSION_STATUS.ERROR;
+      userId = null;
+    }
+    try {
+      onAuthStateChange(Object.freeze({ status, userId }));
+    } catch {
+      // Additive state observers cannot interrupt Auth.
+    }
+  };
+
   const publish = (state, expectedGeneration = generation) => {
     if (retired || expectedGeneration !== generation) return false;
     const rendered = renderDashboardAuth(elements, state);
     if (!rendered) renderingAvailable = false;
+    else notifyAuthState(state);
     return rendered;
   };
 

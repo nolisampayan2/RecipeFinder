@@ -4,7 +4,7 @@ import { createAuthSessionService } from '../js/auth-session.js';
 import { createDashboardAuthIntegration } from '../js/dashboard-auth.js';
 
 const confirmedUser = Object.freeze({
-  id: 'dashboard-user',
+  id: '11111111-1111-4111-8111-111111111111',
   email: 'cook@example.test',
   email_confirmed_at: '2026-11-01T00:00:00Z',
 });
@@ -123,6 +123,104 @@ assert.equal(guestHarness.ui.logout.hidden, true);
 assert.equal(guestHarness.clientCreations(), 1);
 assert.deepEqual(readyClients, [guest.client]);
 assert.deepEqual(guest.counts, { getSession: 1, subscribe: 1, unsubscribe: 0, signOut: 0 });
+
+const observedAuthStates = [];
+const observedFake = createFakeClient({ session: sessionFor() });
+const observedHarness = createIntegration(observedFake, createFakeDocument(), {
+  onAuthStateChange(state) { observedAuthStates.push(state); },
+});
+assert.equal(await observedHarness.integration.activate(), true);
+assert.equal(observedAuthStates.length, 4);
+assert.equal(observedAuthStates.slice(0, -1).every(({ status, userId }) => status === 'loading' && userId === null), true);
+assert.deepEqual(observedAuthStates.at(-1), { status: 'authenticated', userId: confirmedUser.id });
+assert.equal(observedAuthStates.every(Object.isFrozen), true);
+assert.doesNotMatch(JSON.stringify(observedAuthStates), /cook@|never-render|access_token|refresh_token/);
+const observedCountBeforeCleanup = observedAuthStates.length;
+assert.equal(observedHarness.integration.cleanup(), true);
+observedFake.emit('SIGNED_OUT', null);
+assert.equal(observedAuthStates.length, observedCountBeforeCleanup, 'Retired Auth must suppress observer callbacks');
+
+const invalidObservedStates = [];
+const invalidObservedFake = createFakeClient({
+  session: sessionFor({ ...confirmedUser, id: 'not-a-uuid' }),
+});
+const invalidObservedHarness = createIntegration(invalidObservedFake, createFakeDocument(), {
+  onAuthStateChange(state) { invalidObservedStates.push(state); },
+});
+assert.equal(await invalidObservedHarness.integration.activate(), true);
+assert.deepEqual(invalidObservedStates.at(-1), { status: 'error', userId: null });
+
+for (const invalidId of [undefined, null, '', 'malformed-user-id']) {
+  const boundaryStates = [];
+  const boundaryHarness = createIntegration(createFakeClient(), createFakeDocument(), {
+    createSessionService() {
+      const state = { status: 'authenticated', user: { id: invalidId, email: '' } };
+      return {
+        subscribe(listener) { listener(state); return () => true; },
+        async bootstrap() { return state; },
+        async logout() { return { status: 'guest', user: null }; },
+        cleanup() { return true; },
+      };
+    },
+    onAuthStateChange(state) { boundaryStates.push(state); },
+  });
+  assert.equal(await boundaryHarness.integration.activate(), true);
+  assert.deepEqual(boundaryStates.at(-1), { status: 'error', userId: null });
+  assert.equal(boundaryStates.some(({ status }) => status === 'authenticated'), false);
+}
+
+async function observeInjectedAuthenticatedUser(user) {
+  const states = [];
+  const harness = createIntegration(createFakeClient(), createFakeDocument(), {
+    createSessionService() {
+      const state = { status: 'authenticated', user };
+      return {
+        subscribe(listener) { listener(state); return () => true; },
+        async bootstrap() { return state; },
+        async logout() { return { status: 'guest', user: null }; },
+        cleanup() { return true; },
+      };
+    },
+    onAuthStateChange(state) { states.push(state); },
+  });
+  assert.equal(await harness.integration.activate(), true);
+  return states.at(-1);
+}
+
+let validThenInvalidReads = 0;
+const validThenInvalid = await observeInjectedAuthenticatedUser({
+  email: '',
+  get id() {
+    validThenInvalidReads += 1;
+    return validThenInvalidReads === 1 ? confirmedUser.id : 'invalid-after-validation';
+  },
+});
+assert.equal(validThenInvalidReads, 1);
+assert.deepEqual(validThenInvalid, { status: 'authenticated', userId: confirmedUser.id });
+
+const SECOND_VALID_USER_ID = '22222222-2222-4222-8222-222222222222';
+let changingValidReads = 0;
+const changingValid = await observeInjectedAuthenticatedUser({
+  email: '',
+  get id() {
+    changingValidReads += 1;
+    return changingValidReads === 1 ? confirmedUser.id : SECOND_VALID_USER_ID;
+  },
+});
+assert.equal(changingValidReads, 1);
+assert.deepEqual(changingValid, { status: 'authenticated', userId: confirmedUser.id });
+
+const throwingIdentity = await observeInjectedAuthenticatedUser({
+  email: '',
+  get id() { throw new Error('PRIVATE_IDENTITY_GETTER'); },
+});
+assert.deepEqual(throwingIdentity, { status: 'error', userId: null });
+assert.doesNotMatch(JSON.stringify(throwingIdentity), /PRIVATE_IDENTITY_GETTER/);
+
+const throwingStateCallback = createIntegration(createFakeClient(), createFakeDocument(), {
+  onAuthStateChange() { throw new Error('PRIVATE_AUTH_STATE_CALLBACK'); },
+});
+assert.equal(await throwingStateCallback.integration.activate(), true, 'Auth-state observer failures must stay isolated');
 
 const throwingReadyCallback = createIntegration(createFakeClient(), createFakeDocument(), {
   onClientReady() { throw new Error('PRIVATE_CLIENT_READY_ERROR'); },
