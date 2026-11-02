@@ -1,6 +1,13 @@
 import { recipeCatalog } from './js/recipe-catalog.js';
 import { applyStoredTheme, clearFilters, state, toggleFavorite, toggleTheme } from './js/state.js';
-import { initializeImageFallbacks, render, renderCategories, renderCuisines, showToast } from './js/render.js';
+import {
+  getFavoriteActionId,
+  initializeImageFallbacks,
+  render,
+  renderCategories,
+  renderCuisines,
+  showToast,
+} from './js/render.js';
 import {
   closeRecipeModal,
   handleRecipeModalTab,
@@ -14,6 +21,7 @@ import { createFictionalExternalRecipeController } from './js/fictional-external
 import { createExternalSourceRegistry } from './js/external-source-registry.js';
 import { createLiveMealDbDashboard } from './js/live-mealdb-dashboard.js';
 import { createDashboardAuthIntegration } from './js/dashboard-auth.js';
+import { createDashboardAccountFavorites } from './js/dashboard-account-favorites.js';
 import { createDashboardRecipeCatalogLoader } from './js/dashboard-recipe-catalog-loader.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -33,6 +41,15 @@ let recipeMode = 'offline';
 let searchSource = 'offline';
 let dashboardAuth = null;
 let recipeCatalogLoader = null;
+let dashboardAccountFavorites = null;
+let unsubscribeAccountFavorites = null;
+let latestAuthState = Object.freeze({ status: 'loading', userId: null });
+let favoritesPresentation = Object.freeze({
+  mode: 'account-loading',
+  favoriteIds: Object.freeze([]),
+  pendingRecipeIds: Object.freeze([]),
+  message: 'Loading account favorites.',
+});
 let pageRetired = false;
 
 function setSearchSource(source) {
@@ -118,7 +135,7 @@ function renderDashboard() {
   const externalState = recipeMode === 'live' && liveDashboard
     ? liveDashboard.getState()
     : externalRecipeController.getState();
-  render(dashboardCatalog, externalState);
+  render(dashboardCatalog, externalState, favoritesPresentation);
 }
 
 function catalogWithExternalRecipes(baseCatalog, externalState) {
@@ -133,12 +150,13 @@ function catalogWithExternalRecipes(baseCatalog, externalState) {
 function applyPrimaryCatalogResult(result) {
   try {
     if (pageRetired || result?.stale || !result?.catalog) return false;
+    dashboardAccountFavorites?.handleCatalogResult(result);
     primaryCatalog = result.catalog;
     const externalState = recipeMode === 'live' && liveDashboard
       ? liveDashboard.getState()
       : externalRecipeController.getState();
     dashboardCatalog = catalogWithExternalRecipes(primaryCatalog, externalState);
-    render(dashboardCatalog, externalState);
+    render(dashboardCatalog, externalState, favoritesPresentation);
     return true;
   } catch {
     return false;
@@ -148,19 +166,59 @@ function applyPrimaryCatalogResult(result) {
 function acceptDashboardClient(client) {
   if (pageRetired || recipeCatalogLoader) return false;
   try {
+    dashboardAccountFavorites = createDashboardAccountFavorites({
+      client,
+      guestFavorites: state.favorites,
+    });
+    void dashboardAccountFavorites.handleAuthState(latestAuthState);
+    unsubscribeAccountFavorites = dashboardAccountFavorites.subscribe((nextPresentation) => {
+      if (pageRetired) return;
+      favoritesPresentation = nextPresentation;
+      renderDashboard();
+    });
     recipeCatalogLoader = createDashboardRecipeCatalogLoader({ client });
     void recipeCatalogLoader.load().then(applyPrimaryCatalogResult, () => false);
     return true;
   } catch {
+    try { unsubscribeAccountFavorites?.(); } catch { /* Partial setup stays contained. */ }
+    unsubscribeAccountFavorites = null;
+    try { dashboardAccountFavorites?.cleanup(); } catch { /* Partial setup stays contained. */ }
+    dashboardAccountFavorites = null;
     recipeCatalogLoader = null;
     return false;
   }
 }
 
+function acceptDashboardAuthState(authState) {
+  if (pageRetired) return false;
+  latestAuthState = authState;
+  if (!dashboardAccountFavorites) {
+    if (authState?.status === 'guest') {
+      favoritesPresentation = Object.freeze({
+        mode: 'guest',
+        favoriteIds: Object.freeze([...state.favorites]),
+        pendingRecipeIds: Object.freeze([]),
+        message: '',
+      });
+    } else if (authState?.status !== 'loading') {
+      favoritesPresentation = Object.freeze({
+        mode: 'account-error',
+        favoriteIds: Object.freeze([]),
+        pendingRecipeIds: Object.freeze([]),
+        message: 'Account favorites are unavailable.',
+      });
+    }
+    renderDashboard();
+    return true;
+  }
+  void dashboardAccountFavorites.handleAuthState(authState);
+  return true;
+}
+
 function synchronizeLiveRecipes(liveState) {
   if (recipeMode !== 'live') return;
   dashboardCatalog = catalogWithExternalRecipes(primaryCatalog, liveState);
-  render(dashboardCatalog, liveState);
+  render(dashboardCatalog, liveState, favoritesPresentation);
 }
 
 function getLiveDashboard() {
@@ -364,11 +422,24 @@ function initializeSearch() {
 
 function initializePageActions() {
   document.addEventListener('click', (event) => {
-    const favoriteButton = event.target.closest('[data-favorite]');
+    const favoriteButton = event.target.closest('[data-favorite], .unavailable-favorite-remove');
     if (favoriteButton) {
-      toggleFavorite(favoriteButton.dataset.favorite);
-      renderDashboard();
-      showToast('Favorites updated');
+      const recipeId = getFavoriteActionId(favoriteButton);
+      if (typeof recipeId !== 'string') return;
+      if (favoritesPresentation.mode === 'guest') {
+        toggleFavorite(recipeId);
+        dashboardAccountFavorites?.setGuestFavorites(state.favorites);
+        renderDashboard();
+        showToast('Favorites updated');
+      } else if (favoritesPresentation.mode === 'account-ready') {
+        const recipe = dashboardCatalog.getById(recipeId);
+        if (!recipe || recipe.source !== 'database') return;
+        void dashboardAccountFavorites?.toggleFavorite(recipe).then((result) => {
+          if (pageRetired) return;
+          if (result?.ok === true) showToast('Favorites updated');
+          else if (result?.code === 'FAILED') showToast('Account favorites could not be updated');
+        });
+      }
       return;
     }
 
@@ -522,7 +593,10 @@ function initializeApp() {
 initializeApp();
 
 try {
-  dashboardAuth = createDashboardAuthIntegration({ onClientReady: acceptDashboardClient });
+  dashboardAuth = createDashboardAuthIntegration({
+    onClientReady: acceptDashboardClient,
+    onAuthStateChange: acceptDashboardAuthState,
+  });
   void dashboardAuth.activate();
 } catch {
   // Account and database availability must not interrupt guest discovery.
@@ -531,6 +605,9 @@ try {
 window.addEventListener('pagehide', () => {
   if (pageRetired) return;
   pageRetired = true;
+  try { unsubscribeAccountFavorites?.(); } catch { /* Page retirement stays isolated. */ }
+  unsubscribeAccountFavorites = null;
+  dashboardAccountFavorites?.cleanup();
   recipeCatalogLoader?.cleanup();
   dashboardAuth?.cleanup();
 }, { once: true });

@@ -1,10 +1,11 @@
 import { categories, cuisines } from './data.js';
 import { recipeCatalog } from './recipe-catalog.js';
 import { safeImageUrl, setSafeText } from './security.js';
-import { state, toggleFavorite } from './state.js';
+import { state } from './state.js';
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+const favoriteActionIds = new WeakMap();
 const EXTERNAL_ERROR_MESSAGES = Object.freeze({
   timeout: 'Offline recipe previews took too long. Try again.',
   network: 'Offline recipe previews are temporarily unavailable. Try again.',
@@ -27,6 +28,11 @@ function createElement(tagName, className, text) {
   return element;
 }
 
+export function getFavoriteActionId(element) {
+  if (!element || typeof element !== 'object') return null;
+  return favoriteActionIds.get(element) ?? element.dataset?.favorite ?? null;
+}
+
 export function createUnavailableFavoriteViewModel(opaqueId) {
   return Object.freeze({
     opaqueId,
@@ -47,7 +53,26 @@ function configureRecipeImage(image, recipe, className, alt = recipe.name) {
   return image;
 }
 
-function recipeCard(recipe) {
+function normalizeFavoritesPresentation(presentation) {
+  const mode = ['guest', 'account-loading', 'account-ready', 'account-error'].includes(presentation?.mode)
+    ? presentation.mode
+    : 'guest';
+  const favoriteIds = Array.isArray(presentation?.favoriteIds)
+    ? presentation.favoriteIds
+    : [...state.favorites];
+  const pendingRecipeIds = Array.isArray(presentation?.pendingRecipeIds)
+    ? presentation.pendingRecipeIds
+    : [];
+  return Object.freeze({
+    mode,
+    favoriteIds: Object.freeze([...favoriteIds]),
+    favoriteSet: new Set(favoriteIds),
+    pendingSet: new Set(pendingRecipeIds),
+    message: typeof presentation?.message === 'string' ? presentation.message : '',
+  });
+}
+
+function recipeCard(recipe, favorites) {
   const isExternal = recipe.source === 'external';
   const isLiveMealDb = isExternal && recipe.externalProvider === 'themealdb';
   const hasLiveDetails = isLiveMealDb
@@ -56,7 +81,10 @@ function recipeCard(recipe) {
   const hasOfflineDetails = isExternal
     && recipe.externalProvider === 'fictional-offline'
     && /^external:fictional-offline:\d+$/.test(recipe.id);
-  const saved = state.favorites.has(recipe.id);
+  const saved = favorites.favoriteSet.has(recipe.id);
+  const accountMode = favorites.mode !== 'guest';
+  const accountEligible = favorites.mode === 'account-ready' && recipe.source === 'database';
+  const favoriteDisabled = accountMode && (!accountEligible || favorites.pendingSet.has(recipe.id));
   const card = createElement('article', `recipe-card${isExternal ? ' external-preview' : ''}`);
   card.dataset.id = recipe.id;
 
@@ -67,7 +95,10 @@ function recipeCard(recipe) {
   if (!isLiveMealDb) {
     const heart = createElement('button', `heart${saved ? ' saved' : ''}`, saved ? '♥' : '♡');
     heart.type = 'button';
-    heart.dataset.favorite = recipe.id;
+    if (!favoriteDisabled) heart.dataset.favorite = recipe.id;
+    if (!favoriteDisabled) favoriteActionIds.set(heart, recipe.id);
+    heart.disabled = favoriteDisabled;
+    heart.setAttribute('aria-disabled', String(favoriteDisabled));
     heart.setAttribute('aria-label', `${saved ? 'Remove from' : 'Save to'} favorites`);
     card.append(heart);
   }
@@ -98,13 +129,7 @@ function recipeCard(recipe) {
   return card;
 }
 
-function removeUnavailableFavorite(model, catalog, externalState) {
-  toggleFavorite(model.opaqueId);
-  render(catalog, externalState);
-  showToast('Favorites updated');
-}
-
-function unavailableFavoriteCard(entry, catalog, externalState) {
+function unavailableFavoriteCard(entry, favorites) {
   const model = createUnavailableFavoriteViewModel(entry.id);
   const card = createElement('article', 'recipe-card unavailable-favorite-card');
   const art = createElement('div', 'card-image unavailable-favorite-art', '♡');
@@ -117,30 +142,38 @@ function unavailableFavoriteCard(entry, catalog, externalState) {
   );
   const remove = createElement('button', 'view-btn unavailable-favorite-remove', 'Remove favorite');
   remove.type = 'button';
+  remove.disabled = favorites.mode !== 'guest';
+  remove.setAttribute('aria-disabled', String(remove.disabled));
+  if (!remove.disabled) favoriteActionIds.set(remove, model.opaqueId);
   remove.setAttribute('aria-label', model.removeLabel);
-  remove.addEventListener('click', () => removeUnavailableFavorite(model, catalog, externalState));
   body.append(remove);
   card.append(art, body);
   return card;
 }
 
-function unavailableFavoritePreview(entry, catalog, externalState) {
+function unavailableFavoritePreview(entry, favorites) {
   const model = createUnavailableFavoriteViewModel(entry.id);
   const item = createElement('div', 'favorite-item unavailable-favorite-item');
   const icon = createElement('span', 'favorite-placeholder-icon', '♡');
   icon.setAttribute('aria-hidden', 'true');
   const copy = document.createElement('div');
   copy.append(createElement('strong', '', model.title), createElement('small', '', model.status));
-  const remove = createElement('button', 'mini-remove', '×');
+  const remove = createElement('button', 'mini-remove unavailable-favorite-remove', '×');
   remove.type = 'button';
+  remove.disabled = favorites.mode !== 'guest';
+  remove.setAttribute('aria-disabled', String(remove.disabled));
+  if (!remove.disabled) favoriteActionIds.set(remove, model.opaqueId);
   remove.setAttribute('aria-label', model.removeLabel);
-  remove.addEventListener('click', () => removeUnavailableFavorite(model, catalog, externalState));
   item.append(icon, copy, remove);
   return item;
 }
 
-function renderFavorites(catalog, externalState, favoriteEntries) {
-  $('#fav-count').textContent = state.favorites.size;
+function renderFavorites(catalog, externalState, favoriteEntries, favorites) {
+  $('#fav-count').textContent = favorites.favoriteIds.length;
+  const status = $('#favorites-status');
+  status.textContent = favorites.message;
+  status.hidden = favorites.message.length === 0;
+  $('#favorites').setAttribute('aria-busy', String(favorites.mode === 'account-loading'));
   const list = $('#favorite-list');
   list.replaceChildren();
   if (!favoriteEntries.length) {
@@ -150,7 +183,7 @@ function renderFavorites(catalog, externalState, favoriteEntries) {
 
   favoriteEntries.slice(0, 4).forEach((entry) => {
     if (!entry.resolved) {
-      list.append(unavailableFavoritePreview(entry, catalog, externalState));
+      list.append(unavailableFavoritePreview(entry, favorites));
       return;
     }
     const { recipe } = entry;
@@ -212,9 +245,10 @@ function renderExternalStatus(externalState) {
   } else message.textContent = '';
 }
 
-export function render(catalog = recipeCatalog, externalState = null) {
+export function render(catalog = recipeCatalog, externalState = null, presentation = null) {
+  const favorites = normalizeFavoritesPresentation(presentation);
   const isLiveMealDb = externalState?.provider === 'themealdb';
-  const favoriteEntries = catalog.resolveFavoriteIds(state.favorites);
+  const favoriteEntries = catalog.resolveFavoriteIds(favorites.favoriteSet);
   const filteredRecipes = catalog.filter(state.query, state.filter);
   const visibleRecipes = isLiveMealDb && state.view !== 'favorites'
     ? externalState.recipes
@@ -224,9 +258,10 @@ export function render(catalog = recipeCatalog, externalState = null) {
   const showingFullView = state.view === 'all' || state.view === 'favorites';
   const recommendedCards = state.view === 'favorites'
     ? favoriteEntries.map((entry) => entry.resolved
-      ? recipeCard(entry.recipe)
-      : unavailableFavoriteCard(entry, catalog, externalState))
-    : (isLiveMealDb || showingFullView ? visibleRecipes : visibleRecipes.slice(0, 4)).map(recipeCard);
+      ? recipeCard(entry.recipe, favorites)
+      : unavailableFavoriteCard(entry, favorites))
+    : (isLiveMealDb || showingFullView ? visibleRecipes : visibleRecipes.slice(0, 4))
+      .map((recipe) => recipeCard(recipe, favorites));
   const visibleCount = state.view === 'favorites' ? favoriteEntries.length : visibleRecipes.length;
 
   $('#recommended-title').textContent = isLiveMealDb
@@ -239,13 +274,23 @@ export function render(catalog = recipeCatalog, externalState = null) {
   $('#back-to-discover').hidden = !showingFullView;
   $('#recommended-view-all').hidden = isLiveMealDb || showingFullView;
   $('#recommended-grid').replaceChildren(...recommendedCards);
-  $('#more-grid').replaceChildren(...(showingFullView ? [] : visibleRecipes.slice(4).map(recipeCard)));
+  $('#more-grid').replaceChildren(...(showingFullView
+    ? []
+    : visibleRecipes.slice(4).map((recipe) => recipeCard(recipe, favorites))));
   $('#more-recipes').hidden = isLiveMealDb || showingFullView;
   $('#empty-state').hidden = visibleCount > 0 || ['loading', 'error'].includes(externalState?.status);
-  $('#empty-title').textContent = isLiveMealDb
+  $('#empty-title').textContent = state.view === 'favorites' && favorites.mode === 'account-loading'
+    ? 'Loading saved recipes'
+    : state.view === 'favorites' && favorites.mode === 'account-error'
+      ? 'Saved recipes unavailable'
+      : isLiveMealDb
     ? 'No TheMealDB recipes found'
     : state.view === 'favorites' ? 'No saved recipes yet' : 'No recipes found';
-  $('#empty-message').textContent = isLiveMealDb
+  $('#empty-message').textContent = state.view === 'favorites' && favorites.mode === 'account-loading'
+    ? 'Please wait while your account favorites are restored.'
+    : state.view === 'favorites' && favorites.mode === 'account-error'
+      ? 'Your account favorites could not be loaded safely. Please try again later.'
+      : isLiveMealDb
     ? 'Try another recipe name or return to offline recipes.'
     : state.view === 'favorites'
     ? 'Save recipes with the heart button and they will appear here.'
@@ -253,7 +298,7 @@ export function render(catalog = recipeCatalog, externalState = null) {
   $$('.category').forEach((button) => button.classList.toggle('active', button.dataset.filter === state.filter));
   $$('.quick-filters button').forEach((button) => button.classList.toggle('active', button.dataset.filter === state.filter));
   $$('.cuisine').forEach((button) => button.classList.toggle('active', button.dataset.filter === state.filter));
-  renderFavorites(catalog, externalState, favoriteEntries);
+  renderFavorites(catalog, externalState, favoriteEntries, favorites);
   renderExternalStatus(externalState);
 }
 

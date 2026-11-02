@@ -5,7 +5,7 @@ import {
   createFictionalExternalRecipeController,
   createFictionalExternalRecipeSource,
 } from '../js/fictional-external-recipe-source.js';
-import { recipeCatalog } from '../js/recipe-catalog.js';
+import { createRecipeCatalog, recipeCatalog } from '../js/recipe-catalog.js';
 
 let fetchCalls = 0;
 globalThis.fetch = () => { fetchCalls += 1; throw new Error('Fictional source must remain offline'); };
@@ -231,7 +231,8 @@ class FakeElement {
 }
 
 const elementIds = [
-  'fav-count', 'favorite-list', 'external-status', 'external-status-message', 'external-retry',
+  'fav-count', 'favorite-list', 'favorites-status', 'favorites',
+  'external-status', 'external-status-message', 'external-retry',
   'discover-more-recipes', 'back-to-offline', 'mealdb-attribution',
   'recommended', 'recommended-title', 'back-to-discover', 'recommended-view-all', 'recommended-grid',
   'more-grid', 'more-recipes', 'empty-state', 'empty-title', 'empty-message', 'toast',
@@ -265,7 +266,7 @@ globalThis.localStorage = {
 };
 
 const renderModule = await import(`../js/render.js?favorites=${Date.now()}`);
-const { state: favoriteState } = await import('../js/state.js');
+const { state: favoriteState, toggleFavorite: toggleGuestFavorite } = await import('../js/state.js');
 favoriteState.view = 'favorites';
 renderModule.render(recipeCatalog, { status: 'idle', recipes: [], error: null, generation: 0 });
 
@@ -429,7 +430,9 @@ const originalSetTimeout = globalThis.setTimeout;
 const originalClearTimeout = globalThis.clearTimeout;
 globalThis.setTimeout = (callback) => { callback(); return 1; };
 globalThis.clearTimeout = () => {};
-placeholderRemove.dispatch('click');
+assert.equal(renderModule.getFavoriteActionId(placeholderRemove), hostileIds[0]);
+toggleGuestFavorite(renderModule.getFavoriteActionId(placeholderRemove));
+renderModule.render(recipeCatalog, { status: 'idle', recipes: [], error: null, generation: 5 });
 globalThis.setTimeout = originalSetTimeout;
 globalThis.clearTimeout = originalClearTimeout;
 
@@ -440,6 +443,66 @@ assert.equal(JSON.parse(storageWrites[0][1]).includes(hostileIds[0]), false, 'Re
 const resolvedDemoCard = fakeElements.get('#recommended-grid').children[0];
 assert.equal(resolvedDemoCard.dataset.id, 'lemon-chicken');
 assert.equal(resolvedDemoCard.children.at(-1).children.at(-1).dataset.view, 'lemon-chicken', 'Resolved demo behavior must remain unchanged');
+
+favoriteState.view = 'default';
+const loadingPresentation = Object.freeze({
+  mode: 'account-loading', favoriteIds: Object.freeze([]), pendingRecipeIds: Object.freeze([]), message: 'Loading account favorites.',
+});
+renderModule.render(recipeCatalog, { status: 'idle', recipes: [], error: null, generation: 6 }, loadingPresentation);
+assert.equal(fakeElements.get('#fav-count').textContent, 0, 'Auth restoration must not display stored guest favorites');
+assert.equal(fakeElements.get('#favorites-status').textContent, 'Loading account favorites.');
+assert.equal(fakeElements.get('#favorites-status').hidden, false);
+assert.equal(fakeElements.get('#favorites').attributes['aria-busy'], 'true');
+const disabledBuiltInHeart = fakeElements.get('#recommended-grid').children[0].children[1];
+assert.equal(disabledBuiltInHeart.disabled, true);
+assert.equal(disabledBuiltInHeart.attributes['aria-disabled'], 'true');
+assert.equal(renderModule.getFavoriteActionId(disabledBuiltInHeart), null);
+
+const errorPresentation = Object.freeze({
+  mode: 'account-error', favoriteIds: Object.freeze([]), pendingRecipeIds: Object.freeze([]), message: 'Account favorites are unavailable.',
+});
+renderModule.render(recipeCatalog, { status: 'idle', recipes: [], error: null, generation: 7 }, errorPresentation);
+assert.equal(fakeElements.get('#fav-count').textContent, 0);
+assert.equal(fakeElements.get('#favorites-status').textContent, 'Account favorites are unavailable.');
+assert.equal(fakeElements.get('#favorites').attributes['aria-busy'], 'false');
+
+const databaseRecipe = Object.freeze({
+  ...recipeCatalog.list()[0], id: 'database-beef-stew', source: 'database', databaseSourceType: 'cms',
+});
+const databaseOnlyCatalog = createRecipeCatalog([databaseRecipe]);
+const readyPresentation = Object.freeze({
+  mode: 'account-ready', favoriteIds: Object.freeze([databaseRecipe.id]), pendingRecipeIds: Object.freeze([]), message: '',
+});
+renderModule.render(databaseOnlyCatalog, { status: 'idle', recipes: [], error: null, generation: 8 }, readyPresentation);
+assert.equal(fakeElements.get('#fav-count').textContent, 1);
+assert.equal(fakeElements.get('#favorite-list').children.length, 1);
+const readyDatabaseHeart = fakeElements.get('#recommended-grid').children[0].children[1];
+assert.equal(readyDatabaseHeart.disabled, false);
+assert.equal(readyDatabaseHeart.className.includes('saved'), true);
+assert.equal(renderModule.getFavoriteActionId(readyDatabaseHeart), databaseRecipe.id);
+
+const pendingPresentation = Object.freeze({
+  ...readyPresentation, pendingRecipeIds: Object.freeze([databaseRecipe.id]),
+});
+renderModule.render(databaseOnlyCatalog, { status: 'idle', recipes: [], error: null, generation: 9 }, pendingPresentation);
+const pendingDatabaseHeart = fakeElements.get('#recommended-grid').children[0].children[1];
+assert.equal(pendingDatabaseHeart.disabled, true);
+assert.equal(pendingDatabaseHeart.attributes['aria-disabled'], 'true');
+assert.equal(renderModule.getFavoriteActionId(pendingDatabaseHeart), null);
+
+favoriteState.view = 'favorites';
+const unavailableAccountId = 'missing-database-recipe';
+const unavailableAccountPresentation = Object.freeze({
+  mode: 'account-ready', favoriteIds: Object.freeze([unavailableAccountId]), pendingRecipeIds: Object.freeze([]), message: '',
+});
+renderModule.render(databaseOnlyCatalog, { status: 'idle', recipes: [], error: null, generation: 10 }, unavailableAccountPresentation);
+const unavailableAccountCard = fakeElements.get('#recommended-grid').children[0];
+const unavailableAccountRemove = unavailableAccountCard.children[1].children[3];
+assert.equal(unavailableAccountRemove.disabled, true);
+assert.equal(unavailableAccountRemove.attributes['aria-disabled'], 'true');
+assert.deepEqual(unavailableAccountRemove.dataset, {});
+assert.equal(renderModule.getFavoriteActionId(unavailableAccountRemove), null);
+assert.equal(serializedVisibleTree(unavailableAccountCard).includes(unavailableAccountId), false);
 
 globalThis.document = originalDocument;
 globalThis.localStorage = originalLocalStorage;

@@ -66,44 +66,68 @@ assert.deepEqual(collidingDatabaseCatalog.getById(transientRecipe.id), colliding
 assert.equal(collidingDatabaseRecipe.source, 'database');
 
 const appliedRenders = [];
+const handledCatalogResults = [];
 const lifecycle = Function(
   'recipeCatalog',
   'render',
   'externalRecipeController',
+  'handledCatalogResults',
   `${extractFunction('catalogWithExternalRecipes')}
    let pageRetired = false;
    let primaryCatalog = recipeCatalog;
    let dashboardCatalog = primaryCatalog;
    let recipeMode = 'offline';
    let liveDashboard = null;
+   let favoritesPresentation = null;
+   const dashboardAccountFavorites = { handleCatalogResult(result) { handledCatalogResults.push(result); return true; } };
    ${extractFunction('applyPrimaryCatalogResult')}
    return {
      applyPrimaryCatalogResult,
      getPrimary: () => primaryCatalog,
      getDashboard: () => dashboardCatalog,
+      getHandledCatalogResults: () => [...handledCatalogResults],
      retire: () => { pageRetired = true; },
    };`
 )(
   recipeCatalog,
   (catalog, externalState) => appliedRenders.push({ catalog, externalState }),
   { getState: () => ({ status: 'idle', recipes: [] }) },
+  handledCatalogResults,
 );
 
 assert.equal(lifecycle.getPrimary(), recipeCatalog, 'Built-in catalog must be immediately available');
-assert.equal(lifecycle.applyPrimaryCatalogResult({ catalog: databaseCatalog, stale: false }), true);
+const authoritativeDatabaseResult = Object.freeze({
+  catalog: databaseCatalog, origin: 'database', databaseStatus: 'success', stale: false,
+});
+assert.equal(lifecycle.applyPrimaryCatalogResult(authoritativeDatabaseResult), true);
+assert.equal(lifecycle.getHandledCatalogResults()[0], authoritativeDatabaseResult, 'The original loader result must be forwarded unchanged');
 assert.equal(lifecycle.getPrimary(), databaseCatalog);
 assert.equal(lifecycle.getDashboard(), databaseCatalog);
 assert.equal(appliedRenders.length, 1);
 
 const emptyCatalog = createRecipeCatalog([]);
-assert.equal(lifecycle.applyPrimaryCatalogResult({ catalog: emptyCatalog, stale: false }), true);
+const emptyDatabaseResult = Object.freeze({
+  catalog: emptyCatalog, origin: 'database', databaseStatus: 'success', stale: false,
+});
+assert.equal(lifecycle.applyPrimaryCatalogResult(emptyDatabaseResult), true);
+assert.equal(lifecycle.getHandledCatalogResults()[1], emptyDatabaseResult);
 assert.deepEqual(lifecycle.getPrimary().list(), [], 'Successful empty catalogs must remain authoritative');
-assert.equal(lifecycle.applyPrimaryCatalogResult({ catalog: databaseCatalog, stale: true }), false);
-assert.equal(lifecycle.getPrimary(), emptyCatalog, 'Stale results must not replace the current catalog');
+const failedFallbackResult = Object.freeze({
+  catalog: recipeCatalog, origin: 'built-in', databaseStatus: 'failed', stale: false,
+});
+assert.equal(lifecycle.applyPrimaryCatalogResult(failedFallbackResult), true);
+assert.equal(lifecycle.getHandledCatalogResults()[2], failedFallbackResult, 'Fallback must be forwarded so eligibility can fail closed');
+assert.equal(lifecycle.getPrimary(), recipeCatalog);
+const staleResult = Object.freeze({
+  catalog: databaseCatalog, origin: 'database', databaseStatus: 'success', stale: true,
+});
+assert.equal(lifecycle.applyPrimaryCatalogResult(staleResult), false);
+assert.equal(lifecycle.getHandledCatalogResults().includes(staleResult), false, 'Stale results must never reach eligibility');
+assert.equal(lifecycle.getPrimary(), recipeCatalog, 'Stale results must not replace the current catalog');
 
 lifecycle.retire();
-assert.equal(lifecycle.applyPrimaryCatalogResult({ catalog: databaseCatalog, stale: false }), false);
-assert.equal(lifecycle.getPrimary(), emptyCatalog, 'Retired pages must reject late catalog results');
+assert.equal(lifecycle.applyPrimaryCatalogResult(authoritativeDatabaseResult), false);
+assert.equal(lifecycle.getPrimary(), recipeCatalog, 'Retired pages must reject late catalog results');
 
 let openedRecipe = null;
 const modalLookup = Function(
@@ -124,10 +148,10 @@ assert.match(app, /dashboardCatalog = catalogWithExternalRecipes\(primaryCatalog
 assert.match(app, /dashboardCatalog = primaryCatalog/);
 assert.match(app, /const recipes = primaryCatalog\.list\(\)/);
 assert.match(app, /if \(!recipes\.length\)/);
-assert.match(app, /createDashboardAuthIntegration\(\{ onClientReady: acceptDashboardClient \}\)/);
+assert.match(app, /createDashboardAuthIntegration\(\{[\s\S]*?onClientReady: acceptDashboardClient,[\s\S]*?onAuthStateChange: acceptDashboardAuthState/);
 assert.match(app, /recipeCatalogLoader\?\.cleanup\(\)/);
 assert.match(app, /dashboardAuth\?\.cleanup\(\)/);
-assert.doesNotMatch(app, /guest.*import|import.*favorites/i);
+assert.doesNotMatch(app, /guest[^\n]*addOwn|addOwn[^\n]*guest/i);
 assert.doesNotMatch(app, /innerHTML\s*=|insertAdjacentHTML|document\.write/);
 
 console.log('Offline dashboard catalog integration tests passed without live services.');
