@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="RecipeFinder administrator recipe catalog.">
+  <title>Admin Recipe Catalog — RecipeFinder</title>
+  <link rel="icon" type="image/svg+xml" href="assets/recipefinder-favicon.svg">
+  <link rel="stylesheet" href="auth.css">
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+  <a class="skip-link" href="#admin-content">Skip to admin content</a>
+  <main class="admin-shell" id="admin-content" data-admin-app data-admin-state="loading" aria-busy="true">
+    <header class="admin-header">
+      <a class="auth-brand" href="index.html" aria-label="RecipeFinder dashboard">
+        <span class="auth-brand-mark" aria-hidden="true">♨</span>
+        <span class="auth-brand-copy"><strong>Recipe<span>Finder</span></strong><small>ADMIN CMS</small></span>
+      </a>
+      <nav class="admin-actions" aria-label="Admin account actions">
+        <a class="secondary-link" href="login.html" data-admin-sign-in hidden>Sign in</a>
+        <button class="secondary-link admin-logout" type="button" data-admin-logout hidden>Sign out</button>
+        <a class="secondary-link" href="index.html">Dashboard</a>
+      </nav>
+    </header>
+
+    <section class="admin-card" aria-labelledby="admin-title">
+      <div class="admin-intro">
+        <div>
+          <p class="auth-kicker">Secure administration</p>
+          <h1 id="admin-title">Recipe catalog</h1>
+          <p>Review RecipeFinder-owned drafts and published recipes. Editing is not enabled in this phase.</p>
+        </div>
+        <p class="admin-status" data-admin-status role="status" aria-live="polite" aria-atomic="true">Checking your session.</p>
+      </div>
+
+      <div data-admin-content hidden>
+        <div class="admin-toolbar">
+          <label for="admin-search">Search recipes</label>
+          <input id="admin-search" type="search" placeholder="Name, category, cuisine, or status" autocomplete="off" data-admin-search disabled>
+        </div>
+        <div class="admin-table-wrap">
+          <table>
+            <caption class="sr-only">RecipeFinder recipe administration catalog</caption>
+            <thead><tr><th scope="col">Recipe</th><th scope="col">Category</th><th scope="col">Cuisine</th><th scope="col">Status</th></tr></thead>
+            <tbody data-admin-rows></tbody>
+          </table>
+        </div>
+        <p class="admin-empty" data-admin-empty hidden>No recipes are available.</p>
+      </div>
+    </section>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script type="module" src="js/admin-browser.js"></script>
+</body>
+</html>
