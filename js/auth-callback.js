@@ -10,7 +10,7 @@ export const CONFIRMATION_STATUS = Object.freeze({
 
 export const CONFIRMATION_MESSAGES = Object.freeze({
   CONFIRMED: 'Email confirmation completed. Return to sign in to continue.',
-  UNAVAILABLE: 'This confirmation link could not be processed. Return to sign in or registration to continue.',
+  UNAVAILABLE: "We couldn't complete the confirmation process in this browser. Your email may already be verified. Try logging in with your registered email and password. If you can't log in, request a new confirmation email and open it in the same browser where you registered.",
 });
 
 export const CALLBACK_DIAGNOSTIC_STAGE = Object.freeze({

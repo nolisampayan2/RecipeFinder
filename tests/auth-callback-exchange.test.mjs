@@ -238,6 +238,32 @@ assert.deepEqual(await exchangeFailureOrchestration.activate(), {
 });
 assert.equal(exchangeFailureSignOutCalls, 0, 'A failed exchange must not attempt session cleanup');
 
+let missingVerifierSignOutCalls = 0;
+const missingVerifierOrchestration = createManualLoginConfirmationOrchestration({
+  client: {
+    auth: {
+      exchangeCodeForSession: async () => ({
+        data: null,
+        error: new Error('PRIVATE_PKCE_VERIFIER_MISSING'),
+      }),
+      signOut: async () => {
+        missingVerifierSignOutCalls += 1;
+        return { error: null };
+      },
+    },
+  },
+  preparedCallback: orchestrationPreparedCallback,
+});
+const missingVerifierResult = await missingVerifierOrchestration.activate();
+assert.deepEqual(missingVerifierResult, {
+  status: CONFIRMATION_STATUS.UNAVAILABLE,
+  message: CONFIRMATION_MESSAGES.UNAVAILABLE,
+});
+assert.equal(missingVerifierSignOutCalls, 0, 'A missing verifier must not attempt session cleanup');
+assert.match(missingVerifierResult.message, /may already be verified/i);
+assert.match(missingVerifierResult.message, /same browser where you registered/i);
+assert.doesNotMatch(missingVerifierResult.message, /PRIVATE|PKCE|verifier|confirmed|successful/i);
+
 const invalidSignOutResults = [null, undefined, {}, { error: undefined }, { error: true }];
 for (const signOutResult of invalidSignOutResults) {
   const orchestration = createManualLoginConfirmationOrchestration({

@@ -364,6 +364,17 @@ assert.equal(invalid.title, 'Invalid or expired link');
 assert.equal(JSON.stringify(invalid).includes(secret), false);
 assert.equal(confirmationResultView({ status: CONFIRMATION_STATUS.CONFIRMED }).title, 'Confirmation complete');
 assert.equal(confirmationResultView({ status: CONFIRMATION_STATUS.UNAVAILABLE }).title, 'Confirmation unavailable');
+assert.equal(
+  confirmationResultView({ status: CONFIRMATION_STATUS.CONFIRMED }).message,
+  'Email confirmation completed. Return to sign in to continue.',
+  'Successful confirmation must retain the existing manual-sign-in success message'
+);
+const recoveryView = confirmationResultView({ status: CONFIRMATION_STATUS.UNAVAILABLE });
+assert.match(recoveryView.message, /may already be verified/i);
+assert.match(recoveryView.message, /try logging in/i);
+assert.match(recoveryView.message, /same browser where you registered/i);
+assert.doesNotMatch(recoveryView.message, /confirmation (?:complete|completed|successful)/i);
+assert.doesNotMatch(recoveryView.message, /access_token|refresh_token|authorization code|verifier|raw provider/i);
 
 const initializationReplacements = [];
 const fakeDocument = { querySelector: (selector) => nodes.get(selector) || null };
@@ -432,6 +443,7 @@ assert.doesNotMatch(html, /supabase-config|createClient|exchangeCodeForSession|v
 assert.match(html, /href="login\.html"/);
 assert.match(html, /href="register\.html#confirmation-recovery"/);
 assert.match(html, /href="index\.html"/);
+assert.match(html, /Manual sign-in is required\./);
 assert.match(html, /name="referrer" content="no-referrer"/);
 
 console.log('Offline auth callback tests passed without network or authentication side effects.');
