@@ -414,6 +414,7 @@ assert.equal(renderedText.includes(secret), false);
 assert.doesNotMatch(renderedText, /access_token|refresh_token|session|verifier/i);
 
 const html = await readFile(new URL('../auth-callback.html', import.meta.url), 'utf8');
+assert.match(html, /register\.html#confirmation-recovery/);
 const sdkTag = `<script src="${sdkUrl}" integrity="${sdkIntegrity}" crossorigin="anonymous" referrerpolicy="no-referrer"></script>`;
 assert.ok(html.includes(sdkTag), 'The callback page must use the exact approved SDK tag');
 assert.equal(html.split(sdkUrl).length - 1, 1, 'The callback page must load exactly one pinned SDK');
@@ -429,7 +430,7 @@ assert.ok(
 assert.doesNotMatch(html, /Email Verified|Authentication Successful/i);
 assert.doesNotMatch(html, /supabase-config|createClient|exchangeCodeForSession|verifyOtp|getSession/);
 assert.match(html, /href="login\.html"/);
-assert.match(html, /href="register\.html"/);
+assert.match(html, /href="register\.html#confirmation-recovery"/);
 assert.match(html, /href="index\.html"/);
 assert.match(html, /name="referrer" content="no-referrer"/);
 

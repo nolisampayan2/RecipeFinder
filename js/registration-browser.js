@@ -10,9 +10,13 @@ import {
   createRegistrationService,
   resolveRegistrationCallbackUrl,
 } from './registration.js';
+import { createConfirmationResendService } from './confirmation-resend.js';
 import {
+  activateConfirmationResendController,
   activateRegistrationSubmitController,
+  createConfirmationResendSubmitController,
   createRegistrationSubmitController,
+  deactivateConfirmationResendController,
   deactivateRegistrationSubmitController,
 } from './auth-ui.js';
 
@@ -150,6 +154,57 @@ export function createRegistrationControllerActivation(options = {}) {
       }
       if (removed) {
         controller.deactivate?.();
+        activated = false;
+      }
+      return removed;
+    },
+  });
+}
+
+export function createConfirmationResendControllerActivation(options = {}) {
+  let resendService;
+  let createController;
+  let installController;
+  let removeController;
+  try {
+    resendService = options?.resendService;
+    createController = options?.createController ?? createConfirmationResendSubmitController;
+    installController = options?.installController ?? activateConfirmationResendController;
+    removeController = options?.removeController ?? deactivateConfirmationResendController;
+  } catch {
+    return Object.freeze({ activate: () => false, cleanup: () => false });
+  }
+  let controller = null;
+  let activated = false;
+
+  return Object.freeze({
+    activate() {
+      if (activated) return true;
+      if (typeof resendService?.request !== 'function') return false;
+      if (typeof createController !== 'function' || typeof installController !== 'function') return false;
+      try {
+        if (!controller) controller = createController(resendService.request.bind(resendService));
+        controller.activate?.();
+        activated = installController(controller) === true;
+        if (!activated) controller.deactivate?.();
+      } catch {
+        try { controller?.deactivate?.(); } catch { /* Failed setup stays contained. */ }
+        activated = false;
+      }
+      return activated;
+    },
+
+    cleanup() {
+      if (!activated || !controller || typeof removeController !== 'function') return false;
+      let removed = false;
+      try {
+        removed = removeController(controller) === true;
+      } catch {
+        return false;
+      }
+      if (removed) {
+        try { controller.deactivate?.(); } catch { /* Ownership is already removed. */ }
+        try { resendService.cleanup?.(); } catch { /* Service cleanup stays private. */ }
         activated = false;
       }
       return removed;
@@ -341,6 +396,11 @@ export function createRegistrationPageInitialization(options = {}) {
         return Object.freeze({ activate: () => false, cleanup: () => false });
       }
     },
+
+    getClient() {
+      if (!readinessSucceeded) throw registrationClientInitializationFailure();
+      return sharedClientActivation.activate();
+    },
   });
 }
 
@@ -352,14 +412,16 @@ const REGISTRATION_LOADING_MESSAGE = 'Preparing secure account registration.';
 
 function setRegistrationReadiness(documentLike, { available, busy, message = '', isError = false }) {
   try {
-    const form = documentLike?.querySelector?.('[data-auth-form="register"]');
-    const submit = form?.querySelector?.('[type="submit"]');
-    const status = form?.querySelector?.('[data-form-status]');
-    if (submit) submit.disabled = !available;
-    form?.setAttribute?.('aria-busy', String(busy));
-    if (status) {
-      status.textContent = message;
-      status.classList?.toggle?.('is-error', isError);
+    for (const selector of ['[data-auth-form="register"]', '[data-auth-form="resend"]']) {
+      const form = documentLike?.querySelector?.(selector);
+      const submit = form?.querySelector?.('[type="submit"]');
+      const status = form?.querySelector?.('[data-form-status]');
+      if (submit) submit.disabled = !available;
+      form?.setAttribute?.('aria-busy', String(busy));
+      if (status) {
+        status.textContent = message;
+        status.classList?.toggle?.('is-error', isError);
+      }
     }
   } catch {
     // Page readiness failures must not expose dependency details.
@@ -373,6 +435,8 @@ export function createLiveRegistrationPageActivation(options = {}) {
   let documentLike;
   let location;
   let createPageInitialization;
+  let createResendService;
+  let createResendActivation;
   try {
     loadConfig = options?.loadConfig;
     sdk = options?.sdk;
@@ -380,6 +444,8 @@ export function createLiveRegistrationPageActivation(options = {}) {
     documentLike = options?.document;
     location = options?.location;
     createPageInitialization = options?.createPageInitialization;
+    createResendService = options?.createResendService;
+    createResendActivation = options?.createResendActivation;
   } catch {
     throw registrationClientInitializationFailure();
   }
@@ -389,10 +455,13 @@ export function createLiveRegistrationPageActivation(options = {}) {
   if (documentLike === undefined) documentLike = globalThis.document;
   if (location === undefined) location = globalThis.location;
   if (createPageInitialization === undefined) createPageInitialization = createRegistrationPageInitialization;
+  if (createResendService === undefined) createResendService = createConfirmationResendService;
+  if (createResendActivation === undefined) createResendActivation = createConfirmationResendControllerActivation;
 
   let activationPromise;
   let pageInitialization;
   let composition;
+  let resendActivation;
   let generation = 0;
   let retired = false;
 
@@ -424,9 +493,20 @@ export function createLiveRegistrationPageActivation(options = {}) {
             });
             if (retired || activationGeneration !== generation) return false;
             activated = composition?.activate?.() === true;
+            if (activated && typeof pageInitialization.getClient === 'function') {
+              const client = pageInitialization.getClient();
+              const resendService = createResendService(client, { callbackUrl, applicationOrigin });
+              resendActivation = createResendActivation({ resendService });
+              activated = resendActivation?.activate?.() === true;
+            }
             if (retired || activationGeneration !== generation) {
+              try { resendActivation?.cleanup?.(); } catch { /* Retired work stays private. */ }
               try { composition?.cleanup?.(); } catch { /* Retired work stays private. */ }
               return false;
+            }
+            if (!activated) {
+              try { resendActivation?.cleanup?.(); } catch { /* Partial setup stays private. */ }
+              try { composition?.cleanup?.(); } catch { /* Partial setup stays private. */ }
             }
             setRegistrationReadiness(documentLike, {
               available: activated,
@@ -436,6 +516,8 @@ export function createLiveRegistrationPageActivation(options = {}) {
             });
             return activated;
           } catch {
+            try { resendActivation?.cleanup?.(); } catch { /* Partial setup stays private. */ }
+            try { composition?.cleanup?.(); } catch { /* Partial setup stays private. */ }
             return false;
           } finally {
             if (!retired && activationGeneration === generation && !activated) {
@@ -466,6 +548,11 @@ export function createLiveRegistrationPageActivation(options = {}) {
         message: REGISTRATION_MESSAGES.UNAVAILABLE,
         isError: true,
       });
+      try {
+        resendActivation?.cleanup?.();
+      } catch {
+        // The page is retired even if resend cleanup fails.
+      }
       try {
         composition?.cleanup?.();
       } catch {

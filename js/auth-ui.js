@@ -8,6 +8,10 @@ import {
   LOGIN_MESSAGES,
   LOGIN_STATUS,
 } from './login.js';
+import {
+  CONFIRMATION_RESEND_MESSAGES,
+  CONFIRMATION_RESEND_STATUS,
+} from './confirmation-resend.js';
 
 let activeRegistrationController = null;
 let activeRegistrationControllerGeneration = 0;
@@ -17,6 +21,8 @@ let activeLoginController = null;
 let activeLoginControllerGeneration = 0;
 let pendingLoginOwnerToken = null;
 const loginControllerOwnerTokens = new WeakMap();
+let activeConfirmationResendController = null;
+let activeConfirmationResendControllerGeneration = 0;
 
 function setFieldError(form, name, message) {
   const input = form.elements.namedItem(name);
@@ -81,6 +87,142 @@ export function clearRegistrationPasswords(form) {
     const input = form?.elements?.namedItem?.(name);
     if (input && typeof input.value === 'string') input.value = '';
   });
+}
+
+function setConfirmationResendPendingState(form, pending) {
+  const submitButton = form?.querySelector?.('[type="submit"]');
+  if (submitButton) submitButton.disabled = pending;
+  form?.setAttribute?.('aria-busy', String(pending));
+}
+
+export function createConfirmationResendSubmitController(
+  requestResend,
+  {
+    setTimer = (callback, delay) => globalThis.setTimeout(callback, delay),
+    clearTimer = (timer) => globalThis.clearTimeout(timer),
+  } = {}
+) {
+  if (typeof requestResend !== 'function') {
+    throw new TypeError('A confirmation resend function is required.');
+  }
+  if (typeof setTimer !== 'function' || typeof clearTimer !== 'function') {
+    throw new TypeError('Confirmation resend timers are required.');
+  }
+
+  let active = true;
+  let generation = 0;
+  let requestPending = false;
+  let pendingForm = null;
+  let cooldownForm = null;
+  let cooldownTimer = null;
+
+  const finishCooldown = (form, operationGeneration) => {
+    if (!active || operationGeneration !== generation) return;
+    cooldownTimer = null;
+    cooldownForm = null;
+    setConfirmationResendPendingState(form, false);
+  };
+
+  return Object.freeze({
+    async submit(email, { form } = {}) {
+      if (!active) return Object.freeze({
+        status: CONFIRMATION_RESEND_STATUS.STALE,
+        message: CONFIRMATION_RESEND_MESSAGES.UNAVAILABLE,
+        retryAfterMs: 0,
+      });
+      if (requestPending) return Object.freeze({
+        status: CONFIRMATION_RESEND_STATUS.PENDING,
+        message: 'A confirmation email request is already in progress.',
+        retryAfterMs: 0,
+      });
+
+      requestPending = true;
+      pendingForm = form ?? null;
+      const operationGeneration = generation;
+      setConfirmationResendPendingState(form, true);
+      let result;
+      try {
+        result = await requestResend(email);
+      } catch {
+        result = Object.freeze({
+          status: CONFIRMATION_RESEND_STATUS.UNAVAILABLE,
+          message: CONFIRMATION_RESEND_MESSAGES.UNAVAILABLE,
+          retryAfterMs: 0,
+        });
+      } finally {
+        requestPending = false;
+        pendingForm = null;
+      }
+
+      if (!active || operationGeneration !== generation) {
+        return Object.freeze({
+          status: CONFIRMATION_RESEND_STATUS.STALE,
+          message: CONFIRMATION_RESEND_MESSAGES.UNAVAILABLE,
+          retryAfterMs: 0,
+        });
+      }
+
+      let retryAfterMs = 0;
+      try {
+        retryAfterMs = Number.isInteger(result?.retryAfterMs)
+          ? Math.max(0, result.retryAfterMs)
+          : 0;
+      } catch {
+        result = Object.freeze({
+          status: CONFIRMATION_RESEND_STATUS.UNAVAILABLE,
+          message: CONFIRMATION_RESEND_MESSAGES.UNAVAILABLE,
+          retryAfterMs: 0,
+        });
+      }
+      if (retryAfterMs > 0) {
+        if (cooldownTimer !== null) clearTimer(cooldownTimer);
+        cooldownForm = form ?? null;
+        cooldownTimer = setTimer(
+          () => finishCooldown(form, operationGeneration),
+          retryAfterMs
+        );
+      } else {
+        setConfirmationResendPendingState(form, false);
+      }
+      return result;
+    },
+
+    activate() {
+      if (active) return true;
+      active = true;
+      generation += 1;
+      return true;
+    },
+
+    deactivate() {
+      if (!active) return false;
+      active = false;
+      generation += 1;
+      if (cooldownTimer !== null) {
+        clearTimer(cooldownTimer);
+        cooldownTimer = null;
+      }
+      setConfirmationResendPendingState(cooldownForm, false);
+      cooldownForm = null;
+      setConfirmationResendPendingState(pendingForm, false);
+      pendingForm = null;
+      return true;
+    },
+  });
+}
+
+export function activateConfirmationResendController(controller) {
+  if (activeConfirmationResendController || typeof controller?.submit !== 'function') return false;
+  activeConfirmationResendController = controller;
+  activeConfirmationResendControllerGeneration += 1;
+  return true;
+}
+
+export function deactivateConfirmationResendController(controller) {
+  if (activeConfirmationResendController !== controller) return false;
+  activeConfirmationResendController = null;
+  activeConfirmationResendControllerGeneration += 1;
+  return true;
 }
 
 export function createRegistrationSubmitController(submitRegistration) {
@@ -389,12 +531,57 @@ export function createAuthFormSubmitHandler(form) {
   };
 }
 
+export function createConfirmationResendFormSubmitHandler(form) {
+  return async (event) => {
+    event.preventDefault();
+    const email = valueOf(form, 'email').trim();
+    const error = !email
+      ? 'Enter your email address.'
+      : !isValidEmailAddress(email)
+        ? 'Enter a valid email address.'
+        : '';
+    setFieldError(form, 'email', error);
+    if (error) {
+      updateStatus(form, 'Please review the highlighted field.', true);
+      firstInvalidField(form)?.focus();
+      return;
+    }
+
+    const controller = activeConfirmationResendController;
+    const controllerGeneration = activeConfirmationResendControllerGeneration;
+    if (!controller) {
+      updateStatus(form, CONFIRMATION_RESEND_MESSAGES.UNAVAILABLE, true);
+      return;
+    }
+
+    const result = await controller.submit(email, { form });
+    if (
+      activeConfirmationResendController !== controller
+      || activeConfirmationResendControllerGeneration !== controllerGeneration
+    ) return;
+    if (result?.status === CONFIRMATION_RESEND_STATUS.STALE) return;
+    const message = typeof result?.message === 'string'
+      ? result.message
+      : CONFIRMATION_RESEND_MESSAGES.UNAVAILABLE;
+    const isError = result?.status === CONFIRMATION_RESEND_STATUS.INVALID
+      || result?.status === CONFIRMATION_RESEND_STATUS.UNAVAILABLE;
+    updateStatus(form, message, isError);
+  };
+}
+
 function initializeForm() {
   const form = document.querySelector('[data-auth-form]');
   if (!(form instanceof HTMLFormElement)) return;
 
   form.addEventListener('input', createAuthFormInputHandler(form));
   form.addEventListener('submit', createAuthFormSubmitHandler(form));
+}
+
+function initializeConfirmationResendForm() {
+  const form = document.querySelector('[data-auth-form="resend"]');
+  if (!(form instanceof HTMLFormElement)) return;
+  form.addEventListener('input', createAuthFormInputHandler(form));
+  form.addEventListener('submit', createConfirmationResendFormSubmitHandler(form));
 }
 
 function initializeForgotPasswordPreview() {
@@ -411,5 +598,6 @@ function initializeForgotPasswordPreview() {
 if (typeof document !== 'undefined') {
   initializePasswordToggles();
   initializeForm();
+  initializeConfirmationResendForm();
   initializeForgotPasswordPreview();
 }

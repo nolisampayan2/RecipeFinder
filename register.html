@@ -66,6 +66,20 @@
           <p class="prototype-note">After registration, check your inbox and confirm your email before signing in.</p>
         </form>
 
+        <section class="confirmation-recovery" id="confirmation-recovery" aria-labelledby="confirmation-recovery-title">
+          <h2 id="confirmation-recovery-title">Confirmation email expired or missing?</h2>
+          <p>Request a new link without registering again.</p>
+          <form class="auth-form resend-form" id="confirmation-resend-form" data-auth-form="resend" novalidate>
+            <div class="field">
+              <label for="resend-email">Email address</label>
+              <input id="resend-email" name="email" type="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required aria-describedby="resend-email-error">
+              <p class="field-error" id="resend-email-error" data-error-for="email"></p>
+            </div>
+            <button class="auth-submit secondary-action" type="submit" disabled>Resend confirmation email</button>
+            <p class="form-status" data-form-status role="status" aria-live="polite" aria-atomic="true"></p>
+          </form>
+        </section>
+
         <p class="auth-switch">Already have an account? <a href="login.html">Sign in</a></p>
         <a class="back-link" href="index.html">← Back to recipe discovery</a>
       </section>

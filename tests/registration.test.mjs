@@ -1201,7 +1201,7 @@ assert.match(browserSource, /createRegistrationService,[\s\S]*resolveRegistratio
 assert.match(browserSource, /if \(typeof document !== ['"]undefined['"]\)/, 'The browser entrypoint must explicitly activate registration');
 
 const authUiSource = await readFile(new URL('../js/auth-ui.js', import.meta.url), 'utf8');
-assert.equal(authUiSource.match(/addEventListener\(['"]submit['"]/g)?.length, 1, 'The form must retain one submit listener');
+assert.equal(authUiSource.match(/addEventListener\(['"]submit['"]/g)?.length, 2, 'Registration and resend must each own one submit listener');
 assert.match(authUiSource, /activeRegistrationController/, 'Registration controller ownership must remain intact');
 assert.match(authUiSource, /let pendingRegistrationOwnerToken = null;/, 'Registration pending ownership must use an opaque token slot');
 assert.match(authUiSource, /const ownerToken = Symbol\(['"]registration-operation-owner['"]\);/);
@@ -1212,5 +1212,9 @@ assert.match(
   /Your details look ready\. No account was created and no email was sent\./,
   'Missing controller fallback must remain safe'
 );
+assert.match(registerHtml, /data-auth-form="resend"/);
+assert.match(registerHtml, /id="confirmation-recovery"/);
+assert.match(browserSource, /createConfirmationResendService/);
+assert.match(browserSource, /pageInitialization\.getClient\(\)/, 'Resend must reuse the page-owned client');
 
 console.log('Offline registration preparation tests passed with fake clients only.');
