@@ -12,6 +12,7 @@ vendor/
 
 # Build, coverage, and generated output
 dist/
+.dist-build-*/
 build/
 coverage/
 .cache/
