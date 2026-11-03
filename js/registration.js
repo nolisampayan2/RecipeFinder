@@ -1,5 +1,13 @@
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const LOCAL_CALLBACK_URL = 'http://localhost/RecipeFinder/auth-callback.html';
+const APPROVED_REGISTRATION_QUERY_PARAMETERS = new Set([
+  'utm_campaign',
+  'utm_content',
+  'utm_id',
+  'utm_medium',
+  'utm_source',
+  'utm_term',
+]);
 
 export const REGISTRATION_STATUS = Object.freeze({
   INVALID: 'invalid',
@@ -84,6 +92,17 @@ function parseOrigin(value) {
   }
 }
 
+function hasOnlyApprovedRegistrationQueryParameters(pageUrl) {
+  try {
+    for (const name of pageUrl.searchParams.keys()) {
+      if (!APPROVED_REGISTRATION_QUERY_PARAMETERS.has(name)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function resolveRegistrationCallbackUrl(locationLike = globalThis.location) {
   let pageUrl;
   try {
@@ -93,7 +112,12 @@ export function resolveRegistrationCallbackUrl(locationLike = globalThis.locatio
     throw new TypeError('The registration callback URL is not approved.');
   }
 
-  if (pageUrl.username || pageUrl.password || pageUrl.search || pageUrl.hash) {
+  if (
+    pageUrl.username
+    || pageUrl.password
+    || pageUrl.hash
+    || !hasOnlyApprovedRegistrationQueryParameters(pageUrl)
+  ) {
     throw new TypeError('The registration callback URL is not approved.');
   }
   if (pageUrl.origin === 'http://localhost' && pageUrl.pathname === '/RecipeFinder/register.html') {

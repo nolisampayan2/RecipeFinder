@@ -964,6 +964,20 @@ assert.equal(
   resolveRegistrationCallbackUrl('https://preview.recipefinder.example/register.html'),
   'https://preview.recipefinder.example/auth-callback.html'
 );
+assert.equal(
+  resolveRegistrationCallbackUrl('https://preview.recipefinder.example/register.html?utm_source=chatgpt.com'),
+  'https://preview.recipefinder.example/auth-callback.html'
+);
+assert.equal(
+  resolveRegistrationCallbackUrl(
+    'https://preview.recipefinder.example/register.html?utm_source=chatgpt.com&utm_medium=referral&utm_campaign=recipe-launch'
+  ),
+  'https://preview.recipefinder.example/auth-callback.html'
+);
+assert.equal(
+  resolveRegistrationCallbackUrl('http://localhost/RecipeFinder/register.html?utm_source=offline-test'),
+  'http://localhost/RecipeFinder/auth-callback.html'
+);
 for (const rejectedRegistrationLocation of [
   'http://example.com/register.html',
   'https://user:password@example.com/register.html',
@@ -1023,6 +1037,69 @@ assert.equal((await liveRegistrationService.submit(validInput)).status, REGISTRA
 assert.equal(liveRedirectUrl, 'https://recipefinder.example/auth-callback.html');
 assert.equal(liveRegistration.cleanup(), true);
 assert.equal(liveRegistrationSubmit.disabled, true);
+
+const queryRegistrationSubmit = { disabled: true };
+const queryResendSubmit = { disabled: true };
+function createQueryCompatibilityForm(submit) {
+  return {
+    querySelector(selector) {
+      if (selector === '[type="submit"]') return submit;
+      if (selector === '[data-form-status]') {
+        return { textContent: '', classList: { toggle() {} } };
+      }
+      return null;
+    },
+    setAttribute() {},
+  };
+}
+const queryRegistrationForm = createQueryCompatibilityForm(queryRegistrationSubmit);
+const queryResendForm = createQueryCompatibilityForm(queryResendSubmit);
+let queryRegistrationService;
+let queryRegistrationCallbackUrl = '';
+let queryResendCallbackUrl = '';
+const queryCompatibilityClient = {
+  auth: {
+    async signUp(request) {
+      queryRegistrationCallbackUrl = request.options.emailRedirectTo;
+      return { data: { session: null }, error: null };
+    },
+    async signOut() { return { error: null }; },
+    async resend() { return { error: null }; },
+  },
+};
+const queryCompatibilityActivation = createLiveRegistrationPageActivation({
+  document: {
+    querySelector(selector) {
+      if (selector === '[data-auth-form="register"]') return queryRegistrationForm;
+      if (selector === '[data-auth-form="resend"]') return queryResendForm;
+      return null;
+    },
+  },
+  location: {
+    href: 'https://recipefinder.example/register.html?utm_source=chatgpt.com&utm_medium=referral',
+  },
+  createPageInitialization: () => ({
+    initialize: async () => REGISTRATION_CLIENT_STATE.READY,
+    createComposition(options) {
+      queryRegistrationService = options.createService(queryCompatibilityClient);
+      return { activate: () => true, cleanup: () => true };
+    },
+    getClient: () => queryCompatibilityClient,
+  }),
+  createResendService(client, options) {
+    assert.equal(client, queryCompatibilityClient);
+    queryResendCallbackUrl = options.callbackUrl;
+    return { request: async () => ({ status: 'submitted' }), cleanup: () => true };
+  },
+  createResendActivation: () => ({ activate: () => true, cleanup: () => true }),
+});
+assert.equal(await queryCompatibilityActivation.activate(), true);
+assert.equal(queryRegistrationSubmit.disabled, false);
+assert.equal(queryResendSubmit.disabled, false);
+assert.equal((await queryRegistrationService.submit(validInput)).status, REGISTRATION_STATUS.SUBMITTED);
+assert.equal(queryRegistrationCallbackUrl, 'https://recipefinder.example/auth-callback.html');
+assert.equal(queryResendCallbackUrl, 'https://recipefinder.example/auth-callback.html');
+assert.equal(queryCompatibilityActivation.cleanup(), true);
 
 const unavailableRegistrationSubmit = { disabled: true };
 let unavailableCompositionCalls = 0;
