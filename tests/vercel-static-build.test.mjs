@@ -5,10 +5,13 @@ import { dirname, extname, resolve } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
 import {
+  ADMIN_PREVIEW_FILES,
+  ADMIN_PREVIEW_OUTPUT_FILES,
   PRODUCTION_OUTPUT_FILES,
   STATIC_BUILD_CLEANUP_ERROR,
   STATIC_BUILD_ERROR,
   STATIC_RUNTIME_FILES,
+  isAdminPreviewBuildEnabled,
 } from '../scripts/build-vercel-static.mjs';
 
 const TEST_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -17,11 +20,24 @@ const SYNTHETIC_ENVIRONMENT = Object.freeze({
   SUPABASE_URL: 'https://synthetic-project.supabase.co',
   SUPABASE_PUBLISHABLE_KEY: 'pk_public_synthetic_browser_value_1234567890',
 });
+const ADMIN_PREVIEW_ENVIRONMENT = Object.freeze({
+  ...SYNTHETIC_ENVIRONMENT,
+  VERCEL_ENV: 'preview',
+  ENABLE_ADMIN_CMS_PREVIEW: 'true',
+});
 const ERROR_PATTERN = new RegExp(STATIC_BUILD_ERROR.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
 const CLEANUP_ERROR_PATTERN = new RegExp(
   STATIC_BUILD_CLEANUP_ERROR.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
 );
 let fixtureCounter = 0;
+
+assert.equal(PRODUCTION_OUTPUT_FILES.length, 47);
+assert.equal(ADMIN_PREVIEW_FILES.length, 6);
+assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 53);
+assert.deepEqual(
+  ADMIN_PREVIEW_OUTPUT_FILES.filter((path) => !PRODUCTION_OUTPUT_FILES.includes(path)),
+  [...ADMIN_PREVIEW_FILES].sort(),
+);
 
 async function exists(path) {
   try {
@@ -38,6 +54,7 @@ async function createFixture() {
   await realFilesystem.mkdir(root);
   for (const relativePath of [
     ...STATIC_RUNTIME_FILES,
+    ...ADMIN_PREVIEW_FILES,
     'scripts/build-vercel-static.mjs',
     'scripts/generate-supabase-config.mjs',
   ]) {
@@ -66,14 +83,23 @@ function localReference(value) {
     : null;
 }
 
-async function verifySuccessfulOutput(fixture) {
+async function verifySuccessfulOutput(
+  fixture,
+  {
+    environment = SYNTHETIC_ENVIRONMENT,
+    expectedFiles = PRODUCTION_OUTPUT_FILES,
+    adminExpected = false,
+  } = {},
+) {
   const result = await fixture.buildModule.buildVercelStaticSite({
-    environment: SYNTHETIC_ENVIRONMENT,
+    environment,
   });
   assert.equal(result.outputDirectory, resolve(fixture.root, 'dist'));
-  assert.deepEqual(result.files, PRODUCTION_OUTPUT_FILES);
+  assert.deepEqual(result.files, expectedFiles);
 
-  for (const page of ['index.html', 'login.html', 'register.html', 'verify-email.html', 'auth-callback.html']) {
+  const pages = ['index.html', 'login.html', 'register.html', 'verify-email.html', 'auth-callback.html'];
+  if (adminExpected) pages.push('admin.html');
+  for (const page of pages) {
     const html = await realFilesystem.readFile(resolve(result.outputDirectory, page), 'utf8');
     const references = [...html.matchAll(/(?:href|src)=["']([^"']+)["']/gi)]
       .map((match) => localReference(match[1]))
@@ -96,9 +122,10 @@ async function verifySuccessfulOutput(fixture) {
   assert.match(generated, /synthetic-project\.supabase\.co/);
   assert.doesNotMatch(generated, /service.?role|sb_secret_|password|token/i);
   assert.equal(await exists(resolve(fixture.root, '.dist-build-lock')), false);
+  for (const adminFile of ADMIN_PREVIEW_FILES) {
+    assert.equal(await exists(resolve(result.outputDirectory, adminFile)), adminExpected);
+  }
   for (const excluded of [
-    'admin.html', 'admin.css', 'js/admin-browser.js', 'js/admin-cms.js',
-    'js/supabase-admin-access.js', 'js/supabase-admin-recipes.js',
     'tests', 'supabase', 'scripts', '.git', 'js/supabase-config.example.js',
   ]) assert.equal(await exists(resolve(result.outputDirectory, excluded)), false);
 }
@@ -107,6 +134,97 @@ async function verifySuccessfulOutput(fixture) {
   const fixture = await createFixture();
   try {
     await verifySuccessfulOutput(fixture);
+  } finally {
+    await removeFixture(fixture);
+  }
+}
+
+const environmentGateCases = [
+  {
+    name: 'Preview with exact enablement',
+    environment: ADMIN_PREVIEW_ENVIRONMENT,
+    enabled: true,
+  },
+  {
+    name: 'Preview without flag',
+    environment: { ...SYNTHETIC_ENVIRONMENT, VERCEL_ENV: 'preview' },
+    enabled: false,
+  },
+  {
+    name: 'Preview with false flag',
+    environment: { ...SYNTHETIC_ENVIRONMENT, VERCEL_ENV: 'preview', ENABLE_ADMIN_CMS_PREVIEW: 'false' },
+    enabled: false,
+  },
+  {
+    name: 'Preview with uppercase flag',
+    environment: { ...SYNTHETIC_ENVIRONMENT, VERCEL_ENV: 'preview', ENABLE_ADMIN_CMS_PREVIEW: 'TRUE' },
+    enabled: false,
+  },
+  {
+    name: 'Preview with malformed flag',
+    environment: { ...SYNTHETIC_ENVIRONMENT, VERCEL_ENV: 'preview', ENABLE_ADMIN_CMS_PREVIEW: ' true ' },
+    enabled: false,
+  },
+  {
+    name: 'Production with enablement flag',
+    environment: { ...SYNTHETIC_ENVIRONMENT, VERCEL_ENV: 'production', ENABLE_ADMIN_CMS_PREVIEW: 'true' },
+    enabled: false,
+  },
+  {
+    name: 'Production without flag',
+    environment: { ...SYNTHETIC_ENVIRONMENT, VERCEL_ENV: 'production' },
+    enabled: false,
+  },
+  {
+    name: 'Development with enablement flag',
+    environment: { ...SYNTHETIC_ENVIRONMENT, VERCEL_ENV: 'development', ENABLE_ADMIN_CMS_PREVIEW: 'true' },
+    enabled: false,
+  },
+  {
+    name: 'Missing Vercel environment with enablement flag',
+    environment: { ...SYNTHETIC_ENVIRONMENT, ENABLE_ADMIN_CMS_PREVIEW: 'true' },
+    enabled: false,
+  },
+];
+
+for (const testCase of environmentGateCases) {
+  assert.equal(
+    isAdminPreviewBuildEnabled(testCase.environment),
+    testCase.enabled,
+    testCase.name,
+  );
+  const fixture = await createFixture();
+  try {
+    await verifySuccessfulOutput(fixture, {
+      environment: testCase.environment,
+      expectedFiles: testCase.enabled ? ADMIN_PREVIEW_OUTPUT_FILES : PRODUCTION_OUTPUT_FILES,
+      adminExpected: testCase.enabled,
+    });
+  } finally {
+    await removeFixture(fixture);
+  }
+}
+
+for (const hostileEnvironment of [
+  null,
+  [],
+  Object.defineProperty({}, 'VERCEL_ENV', {
+    get() { throw new Error('synthetic hostile environment'); },
+  }),
+]) {
+  assert.equal(isAdminPreviewBuildEnabled(hostileEnvironment), false);
+}
+
+{
+  const fixture = await createFixture();
+  await realFilesystem.rm(resolve(fixture.root, 'js/supabase-admin-access.js'));
+  try {
+    await assert.rejects(
+      fixture.buildModule.buildVercelStaticSite({ environment: ADMIN_PREVIEW_ENVIRONMENT }),
+      ERROR_PATTERN,
+    );
+    assert.equal(await exists(resolve(fixture.root, 'dist')), false);
+    assert.equal(await exists(resolve(fixture.root, `.dist-build-${process.pid}`)), false);
   } finally {
     await removeFixture(fixture);
   }
