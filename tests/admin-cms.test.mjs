@@ -142,12 +142,22 @@ function element() {
 }
 const elements = {
   root: element(), status: element(), content: element(), rows: element(), empty: element(),
-  search: element(), signIn: element(), logout: element(),
+  search: element(), statusFilter: element(), count: element(), create: element(),
+  signIn: element(), logout: element(),
 };
+elements.statusFilter.value = 'all';
 const fakeDocument = { createElement() { return element(); } };
 assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.CHECKING, recipes: [] }, fakeDocument), true);
 assert.equal(elements.content.hidden, true);
 assert.equal(elements.rows.children.length, 0);
+assert.equal(elements.signIn.hidden, true, 'Loading state hides Sign In');
+assert.equal(elements.logout.hidden, true, 'Loading state hides Sign Out');
+assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.GUEST, recipes: [] }, fakeDocument, '', 'all', null, false), true);
+assert.equal(elements.signIn.hidden, false, 'Signed-out state shows Sign In');
+assert.equal(elements.logout.hidden, true, 'Signed-out state hides Sign Out');
+assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.DENIED, recipes: [] }, fakeDocument, '', 'all', null, true), true);
+assert.equal(elements.signIn.hidden, true, 'Authenticated denied state hides Sign In');
+assert.equal(elements.logout.hidden, false, 'Authenticated denied state shows Sign Out');
 assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.READY, recipes }, fakeDocument), true);
 assert.equal(elements.content.hidden, false);
 assert.equal(elements.rows.children.length, 1);
@@ -155,17 +165,25 @@ assert.equal(elements.rows.children[0].children[0].textContent, 'Safe <Recipe>')
 assert.equal('innerHTML' in elements.rows.children[0].children[0], false);
 assert.equal(filterAdminRecipes(recipes, 'filipino').length, 1);
 assert.equal(filterAdminRecipes(recipes, 'published').length, 0);
+assert.equal(filterAdminRecipes(recipes, '', 'draft').length, 1);
+assert.equal(elements.count.textContent, '1 recipe');
+assert.equal(elements.create.disabled, true, 'Live activation remains read only without injected fake services');
 
 const pageElements = {
   root: element(), status: element(), content: element(), rows: element(), empty: element(),
-  search: element(), signIn: element(), logout: element(),
+  search: element(), statusFilter: element(), count: element(), create: element(),
+  signIn: element(), logout: element(),
 };
+pageElements.statusFilter.value = 'all';
 const pageSelectors = new Map([
   ['[data-admin-status]', pageElements.status],
   ['[data-admin-content]', pageElements.content],
   ['[data-admin-rows]', pageElements.rows],
   ['[data-admin-empty]', pageElements.empty],
   ['[data-admin-search]', pageElements.search],
+  ['[data-admin-status-filter]', pageElements.statusFilter],
+  ['[data-admin-count]', pageElements.count],
+  ['[data-admin-create]', pageElements.create],
   ['[data-admin-sign-in]', pageElements.signIn],
   ['[data-admin-logout]', pageElements.logout],
 ]);
@@ -176,6 +194,7 @@ const pageDocument = {
 };
 const sharedClient = { auth: {} };
 const acceptedClients = [];
+const editorAuthorizations = [];
 let ownerCreations = 0;
 let sessionListener;
 const page = createAdminPageActivation({
@@ -203,6 +222,24 @@ const page = createAdminPageActivation({
       cleanup: () => true,
     };
   },
+  createMutationService(client) {
+    acceptedClients.push(client);
+    return { createDraft() {}, editDraft() {}, invalidate() {}, cleanup() {} };
+  },
+  createTaxonomySource(client) {
+    acceptedClients.push(client);
+    return { listCategories() {}, listCuisines() {}, invalidate() {}, cleanup() {} };
+  },
+  createEditor({ mutationService, taxonomySource }) {
+    assert.equal(typeof mutationService.createDraft, 'function');
+    assert.equal(typeof taxonomySource.listCategories, 'function');
+    return {
+      openCreate: async () => true,
+      openEdit: async () => true,
+      setAuthorization(authorized, userId) { editorAuthorizations.push([authorized, userId]); return true; },
+      cleanup: () => true,
+    };
+  },
   createSessionService(client) {
     acceptedClients.push(client);
     return {
@@ -220,13 +257,21 @@ assert.equal(await page.activate(), true);
 await Promise.resolve();
 await Promise.resolve();
 assert.equal(ownerCreations, 1);
-assert.deepEqual(acceptedClients, [sharedClient, sharedClient, sharedClient]);
+assert.deepEqual(acceptedClients, [sharedClient, sharedClient, sharedClient, sharedClient, sharedClient]);
 assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.READY);
+assert.deepEqual(editorAuthorizations.at(-1), [true, USER_A]);
+assert.equal(pageElements.signIn.hidden, true);
+assert.equal(pageElements.logout.hidden, false);
 assert.equal(pageElements.rows.children.length, 1);
 pageElements.search.value = 'missing';
 pageElements.search.emit('input');
 assert.equal(pageElements.rows.children.length, 0);
 assert.equal(pageElements.empty.hidden, false);
+pageElements.logout.emit('click');
+await Promise.resolve();
+assert.deepEqual(editorAuthorizations.at(-1), [false, null]);
+assert.equal(pageElements.signIn.hidden, false);
+assert.equal(pageElements.logout.hidden, true);
 assert.equal(page.cleanup(), true);
 assert.equal(page.cleanup(), false);
 assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.RETIRED);
@@ -235,8 +280,15 @@ const html = await readFile(new URL('../admin.html', import.meta.url), 'utf8');
 assert.match(html, /data-admin-app/);
 assert.match(html, /data-admin-content hidden/);
 assert.match(html, /data-admin-search disabled/);
-assert.doesNotMatch(html, /\b(?:Create|Edit|Delete|Publish|Unpublish)\b/);
+assert.match(html, /data-admin-editor-form/);
+assert.match(html, /data-error-for="form"/);
+assert.match(html, /data-admin-create disabled/);
+assert.doesNotMatch(html, /\b(?:Delete|Publish|Unpublish)\b/);
+const css = await readFile(new URL('../admin.css', import.meta.url), 'utf8');
+assert.match(css, /background-position:right 16px center/);
+assert.match(css, /\.admin-actions\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
 const browserSource = await readFile(new URL('../js/admin-browser.js', import.meta.url), 'utf8');
 assert.doesNotMatch(browserSource, /innerHTML|insertAdjacentHTML|document\.write|service_role|\.insert\s*\(|\.update\s*\(|\.delete\s*\(|\.upsert\s*\(/i);
+assert.doesNotMatch(browserSource, /supabase-admin-recipe-mutations|supabase-admin-taxonomies/);
 
 console.log('Offline Admin CMS authorization and read-only UI tests passed with fakes only.');

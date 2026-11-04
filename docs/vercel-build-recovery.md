@@ -32,7 +32,7 @@ Do not automate deletion of an unverified lock or temporary path.
 ## Admin CMS Preview isolation
 
 The Admin CMS is excluded from ordinary, Development, and Production builds.
-Its six static files are included only when both build variables match exactly:
+Its eight static files are included only when both build variables match exactly:
 
 ```text
 VERCEL_ENV=preview
@@ -46,11 +46,12 @@ information. The build also requires Vercel's own `VERCEL_ENV` value to be
 
 Before a supervised Preview deployment, run the offline static-build tests and
 confirm that the Preview inventory adds exactly `admin.html`, `admin.css`, and
-the four Admin-only JavaScript modules. Confirm separately that a Production
-build retains the original public-only inventory.
+the six Admin-only JavaScript modules. The editor UI and validator are safe to
+package, but the mutation and taxonomy service modules remain excluded. Confirm
+separately that a Production build retains the original 47-file inventory.
 
 To disable the Preview Admin route, remove `ENABLE_ADMIN_CMS_PREVIEW` or set it
 to any value other than the exact lowercase string `true`, then perform a
-separately authorized Preview rebuild. Verify that `admin.html` and all five
+separately authorized Preview rebuild. Verify that `admin.html` and all seven
 other Admin-only files are absent from the generated inventory. This does not
 revoke an administrator role or change Supabase.

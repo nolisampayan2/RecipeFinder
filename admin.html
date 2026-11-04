@@ -30,25 +30,55 @@
         <div>
           <p class="auth-kicker">Secure administration</p>
           <h1 id="admin-title">Recipe catalog</h1>
-          <p>Review RecipeFinder-owned drafts and published recipes. Editing is not enabled in this phase.</p>
+          <p>Review RecipeFinder-owned drafts and published recipes in a secure workspace.</p>
         </div>
         <p class="admin-status" data-admin-status role="status" aria-live="polite" aria-atomic="true">Checking your session.</p>
       </div>
 
       <div data-admin-content hidden>
-        <div class="admin-toolbar">
-          <label for="admin-search">Search recipes</label>
-          <input id="admin-search" type="search" placeholder="Name, category, cuisine, or status" autocomplete="off" data-admin-search disabled>
+        <div class="admin-toolbar" aria-label="Recipe management tools">
+          <div class="admin-toolbar-heading">
+            <div><p class="admin-eyebrow">Recipe management</p><p class="admin-count" data-admin-count>0 recipes</p></div>
+            <button class="admin-primary-button" type="button" data-admin-create disabled>Create recipe</button>
+          </div>
+          <div class="admin-toolbar-filters">
+            <label class="admin-field" for="admin-search"><span>Search recipes</span><input id="admin-search" type="search" placeholder="Name, category, or cuisine" autocomplete="off" data-admin-search disabled></label>
+            <label class="admin-field" for="admin-status-filter"><span>Status</span><select id="admin-status-filter" data-admin-status-filter disabled><option value="all">All statuses</option><option value="draft">Draft</option><option value="published">Published</option></select></label>
+          </div>
         </div>
         <div class="admin-table-wrap">
           <table>
             <caption class="sr-only">RecipeFinder recipe administration catalog</caption>
-            <thead><tr><th scope="col">Recipe</th><th scope="col">Category</th><th scope="col">Cuisine</th><th scope="col">Status</th></tr></thead>
+            <thead><tr><th scope="col">Recipe</th><th scope="col">Category</th><th scope="col">Cuisine</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
             <tbody data-admin-rows></tbody>
           </table>
         </div>
         <p class="admin-empty" data-admin-empty hidden>No recipes are available.</p>
       </div>
+    </section>
+
+    <section class="admin-card admin-editor" data-admin-editor hidden aria-labelledby="admin-editor-title">
+      <div class="admin-editor-heading">
+        <div><p class="admin-eyebrow">Draft workspace</p><h2 id="admin-editor-title" data-admin-editor-title>Create recipe draft</h2></div>
+        <button class="admin-icon-button" type="button" data-admin-editor-close aria-label="Close recipe editor">&times;</button>
+      </div>
+      <p class="admin-editor-note">Draft saving is available only in the offline injected test environment until separately activated.</p>
+      <form data-admin-editor-form novalidate>
+        <div class="admin-form-grid">
+          <label class="admin-field admin-field-wide"><span>Recipe title</span><input name="name" maxlength="160" autocomplete="off" data-editor-field="name" aria-describedby="admin-name-error"><small id="admin-name-error" class="admin-field-error" data-error-for="name"></small></label>
+          <label class="admin-field admin-field-wide"><span>Description</span><textarea name="description" rows="3" data-editor-field="description" aria-describedby="admin-description-error"></textarea><small id="admin-description-error" class="admin-field-error" data-error-for="description"></small></label>
+          <label class="admin-field"><span>Category</span><select name="categoryId" data-editor-field="categoryId" aria-describedby="admin-category-error"><option value="">Select category</option></select><small id="admin-category-error" class="admin-field-error" data-error-for="categoryId"></small></label>
+          <label class="admin-field"><span>Cuisine</span><select name="cuisineId" data-editor-field="cuisineId" aria-describedby="admin-cuisine-error"><option value="">Select cuisine</option></select><small id="admin-cuisine-error" class="admin-field-error" data-error-for="cuisineId"></small></label>
+          <label class="admin-field admin-field-wide"><span>Main image URL</span><input name="imageUrl" type="url" inputmode="url" data-editor-field="imageUrl" aria-describedby="admin-image-error"><small id="admin-image-error" class="admin-field-error" data-error-for="imageUrl"></small></label>
+          <label class="admin-field"><span>Fallback image URL <em>Optional</em></span><input name="fallbackImageUrl" type="url" inputmode="url" data-editor-field="fallbackImageUrl" aria-describedby="admin-fallback-error"><small id="admin-fallback-error" class="admin-field-error" data-error-for="fallbackImageUrl"></small></label>
+          <label class="admin-field"><span>Tutorial URL <em>Optional</em></span><input name="tutorialUrl" type="url" inputmode="url" data-editor-field="tutorialUrl" aria-describedby="admin-tutorial-error"><small id="admin-tutorial-error" class="admin-field-error" data-error-for="tutorialUrl"></small></label>
+        </div>
+        <fieldset class="admin-ingredients"><legend>Ingredients</legend><div data-editor-ingredients></div><button class="admin-secondary-button" type="button" data-editor-add-ingredient>Add ingredient</button><small class="admin-field-error" data-error-for="ingredients"></small></fieldset>
+        <label class="admin-field"><span>Instructions</span><textarea name="instructions" rows="7" data-editor-field="instructions" aria-describedby="admin-instructions-error"></textarea><small id="admin-instructions-error" class="admin-field-error" data-error-for="instructions"></small></label>
+        <small class="admin-field-error" data-error-for="form"></small>
+        <p class="admin-editor-status" data-admin-editor-status role="status" aria-live="polite" aria-atomic="true"></p>
+        <div class="admin-editor-actions"><button class="admin-secondary-button" type="button" data-admin-editor-cancel>Cancel</button><button class="admin-primary-button" type="submit" data-admin-editor-save>Save draft</button></div>
+      </form>
     </section>
   </main>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous" referrerpolicy="no-referrer"></script>

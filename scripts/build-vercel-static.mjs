@@ -86,6 +86,8 @@ export const ADMIN_PREVIEW_FILES = Object.freeze([
   'admin.css',
   'js/admin-browser.js',
   'js/admin-cms.js',
+  'js/admin-recipe-editor.js',
+  'js/admin-recipe-validation.js',
   'js/supabase-admin-access.js',
   'js/supabase-admin-recipes.js',
 ]);

@@ -32,8 +32,17 @@ const CLEANUP_ERROR_PATTERN = new RegExp(
 let fixtureCounter = 0;
 
 assert.equal(PRODUCTION_OUTPUT_FILES.length, 47);
-assert.equal(ADMIN_PREVIEW_FILES.length, 6);
-assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 53);
+assert.equal(ADMIN_PREVIEW_FILES.length, 8);
+assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 55);
+assert.equal(ADMIN_PREVIEW_FILES.includes('js/admin-recipe-editor.js'), true);
+assert.equal(ADMIN_PREVIEW_FILES.includes('js/admin-recipe-validation.js'), true);
+for (const inactiveService of [
+  'js/supabase-admin-recipe-mutations.js',
+  'js/supabase-admin-taxonomies.js',
+]) {
+  assert.equal(PRODUCTION_OUTPUT_FILES.includes(inactiveService), false);
+  assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.includes(inactiveService), false);
+}
 assert.deepEqual(
   ADMIN_PREVIEW_OUTPUT_FILES.filter((path) => !PRODUCTION_OUTPUT_FILES.includes(path)),
   [...ADMIN_PREVIEW_FILES].sort(),
