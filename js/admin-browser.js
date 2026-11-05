@@ -30,11 +30,222 @@ function requireElements(documentLike) {
     create: root?.querySelector?.('[data-admin-create]'),
     signIn: root?.querySelector?.('[data-admin-sign-in]'),
     logout: root?.querySelector?.('[data-admin-logout]'),
+    sidebar: root?.querySelector?.('[data-admin-sidebar]'),
+    workspace: root?.querySelector?.('[data-admin-workspace]'),
+    menuToggle: root?.querySelector?.('[data-admin-menu-toggle]'),
+    menuClose: root?.querySelector?.('[data-admin-menu-close]'),
+    menuBackdrop: root?.querySelector?.('[data-admin-menu-backdrop]'),
   };
   if (Object.values(elements).some((element) => !element)) {
     throw new TypeError('Admin interface is unavailable.');
   }
   return elements;
+}
+
+function setInert(element, inert) {
+  element.inert = inert;
+  if (inert) element.setAttribute('inert', '');
+  else element.removeAttribute?.('inert');
+}
+
+export function createAdminDrawerController({
+  elements,
+  documentLike = globalThis.document,
+  windowLike = globalThis,
+} = {}) {
+  const required = ['root', 'sidebar', 'workspace', 'menuToggle', 'menuClose', 'menuBackdrop'];
+  if (!elements || required.some((key) => !elements[key])) {
+    throw new TypeError('Admin drawer elements are required.');
+  }
+
+  const media = typeof windowLike?.matchMedia === 'function'
+    ? windowLike.matchMedia('(max-width: 700px)')
+    : { matches: false, addEventListener() {}, removeEventListener() {} };
+  let mobile = Boolean(media.matches);
+  let opened = false;
+  let retired = false;
+  let restoreTarget = null;
+  let openingFrame = null;
+  const listeners = [];
+
+  const listen = (target, type, listener) => {
+    target?.addEventListener?.(type, listener);
+    listeners.push(() => target?.removeEventListener?.(type, listener));
+  };
+
+  const setBodyLocked = (locked) => {
+    try { documentLike?.body?.classList?.toggle('admin-drawer-open', locked); } catch { /* Scroll locking fails closed on cleanup. */ }
+  };
+
+  const setWorkspaceInactive = (inactive) => {
+    setInert(elements.workspace, inactive);
+    if (inactive) elements.workspace.setAttribute('aria-hidden', 'true');
+    else elements.workspace.removeAttribute?.('aria-hidden');
+  };
+
+  const cancelOpeningFrame = () => {
+    if (openingFrame === null) return false;
+    const frame = openingFrame;
+    openingFrame = null;
+    try { windowLike?.cancelAnimationFrame?.(frame); } catch { /* State rollback remains authoritative. */ }
+    return true;
+  };
+
+  const scheduleOpeningFrame = (callback) => {
+    if (typeof windowLike?.requestAnimationFrame !== 'function') {
+      callback();
+      return;
+    }
+    openingFrame = windowLike.requestAnimationFrame(() => {
+      openingFrame = null;
+      if (retired || !mobile || !opened) return;
+      openingFrame = windowLike.requestAnimationFrame(() => {
+        openingFrame = null;
+        callback();
+      });
+    });
+  };
+
+  const focusableItems = () => {
+    try {
+      return [...elements.sidebar.querySelectorAll('a[href],button:not([disabled]),[tabindex]:not([tabindex="-1"])')]
+        .filter((item) => !item.hidden && !item.disabled && !item.inert && item.getAttribute?.('aria-hidden') !== 'true');
+    } catch {
+      return [elements.menuClose].filter((item) => !item.hidden && !item.disabled);
+    }
+  };
+
+  const applyClosedMobileState = () => {
+    cancelOpeningFrame();
+    opened = false;
+    elements.root.dataset.drawerOpen = 'false';
+    elements.menuToggle.setAttribute('aria-expanded', 'false');
+    elements.sidebar.setAttribute('role', 'dialog');
+    elements.sidebar.removeAttribute?.('aria-modal');
+    elements.sidebar.setAttribute('aria-hidden', 'true');
+    setInert(elements.sidebar, true);
+    setWorkspaceInactive(false);
+    elements.menuBackdrop.hidden = true;
+    setBodyLocked(false);
+  };
+
+  const applyDesktopState = () => {
+    cancelOpeningFrame();
+    opened = false;
+    elements.root.dataset.drawerOpen = 'false';
+    elements.menuToggle.setAttribute('aria-expanded', 'false');
+    elements.sidebar.setAttribute('role', 'complementary');
+    elements.sidebar.removeAttribute?.('aria-modal');
+    elements.sidebar.removeAttribute?.('aria-hidden');
+    setInert(elements.sidebar, false);
+    setWorkspaceInactive(false);
+    elements.menuBackdrop.hidden = true;
+    setBodyLocked(false);
+  };
+
+  const close = ({ restoreFocus = true } = {}) => {
+    if (retired) return false;
+    const wasOpen = opened;
+    if (mobile) applyClosedMobileState();
+    else applyDesktopState();
+    const target = restoreTarget;
+    restoreTarget = null;
+    if (wasOpen && restoreFocus) {
+      try { (target?.focus ? target : elements.menuToggle).focus(); } catch { /* Focus restoration stays best effort. */ }
+    }
+    return wasOpen;
+  };
+
+  const open = () => {
+    if (retired || !mobile || opened) return false;
+    restoreTarget = documentLike?.activeElement ?? elements.menuToggle;
+    opened = true;
+    elements.root.dataset.drawerOpen = 'true';
+    elements.menuToggle.setAttribute('aria-expanded', 'true');
+    elements.sidebar.setAttribute('role', 'dialog');
+    elements.sidebar.removeAttribute?.('aria-hidden');
+    setInert(elements.sidebar, false);
+    scheduleOpeningFrame(() => {
+      if (retired || !mobile || !opened) return;
+      try { elements.menuClose.focus(); } catch { /* Focus verification below keeps the workspace available on failure. */ }
+      if (documentLike?.activeElement !== elements.menuClose) {
+        const target = restoreTarget;
+        applyClosedMobileState();
+        restoreTarget = null;
+        try { target?.focus?.(); } catch { /* Failed opening leaves focus restoration best effort. */ }
+        return;
+      }
+      elements.sidebar.setAttribute('aria-modal', 'true');
+      setWorkspaceInactive(true);
+      elements.menuBackdrop.hidden = false;
+      setBodyLocked(true);
+    });
+    return true;
+  };
+
+  const onKeydown = (event) => {
+    if (!opened) return;
+    if (event?.key === 'Escape') {
+      event.preventDefault?.();
+      close();
+      return;
+    }
+    if (event?.key !== 'Tab') return;
+    const items = focusableItems();
+    if (!items.length) {
+      event.preventDefault?.();
+      elements.menuClose.focus?.();
+      return;
+    }
+    const active = documentLike?.activeElement;
+    const first = items[0];
+    const last = items.at(-1);
+    if (event.shiftKey && (active === first || !items.includes(active))) {
+      event.preventDefault?.();
+      last.focus?.();
+    } else if (!event.shiftKey && (active === last || !items.includes(active))) {
+      event.preventDefault?.();
+      first.focus?.();
+    }
+  };
+
+  const onMediaChange = (event) => {
+    if (retired) return;
+    const wasOpen = opened;
+    mobile = Boolean(event?.matches);
+    restoreTarget = null;
+    if (mobile) applyClosedMobileState();
+    else {
+      applyDesktopState();
+      if (wasOpen) {
+        try { elements.sidebar.querySelector?.('[aria-current="page"]')?.focus?.(); } catch { /* Desktop focus remains inside visible navigation. */ }
+      }
+    }
+  };
+
+  listen(elements.menuToggle, 'click', open);
+  listen(elements.menuClose, 'click', () => close());
+  listen(elements.menuBackdrop, 'click', () => close());
+  listen(documentLike, 'keydown', onKeydown);
+  listen(media, 'change', onMediaChange);
+  if (mobile) applyClosedMobileState();
+  else applyDesktopState();
+
+  return Object.freeze({
+    open,
+    close,
+    isOpen() { return opened; },
+    isMobile() { return mobile; },
+    cleanup() {
+      if (retired) return false;
+      close({ restoreFocus: false });
+      retired = true;
+      for (const remove of listeners.splice(0)) {
+        try { remove(); } catch { /* Listener cleanup remains isolated. */ }
+      }
+      return true;
+    },
+  });
 }
 
 function editorElements(root) {
@@ -195,6 +406,7 @@ async function loadLocalPublicConfig() {
 
 export function createAdminPageActivation(options = {}) {
   const documentLike = options.documentLike ?? globalThis.document;
+  const windowLike = options.windowLike ?? globalThis;
   const sdk = options.sdk ?? globalThis.supabase;
   const loadConfig = options.loadConfig ?? loadLocalPublicConfig;
   const createClientOwner = options.createClientOwner ?? createSupabasePageClientOwner;
@@ -203,9 +415,11 @@ export function createAdminPageActivation(options = {}) {
   const createRecipeSource = options.createRecipeSource ?? createSupabaseAdminRecipeSource;
   const createCoordinator = options.createCoordinator ?? createAdminCmsCoordinator;
   const createEditor = options.createEditor ?? createAdminRecipeEditor;
+  const createDrawer = options.createDrawer ?? createAdminDrawerController;
   const createMutationService = options.createMutationService;
   const createTaxonomySource = options.createTaxonomySource;
   const elements = requireElements(documentLike);
+  const drawer = createDrawer({ elements, documentLike, windowLike });
 
   let owner;
   let sessionService;
@@ -231,7 +445,10 @@ export function createAdminPageActivation(options = {}) {
   const onSearch = () => { if (coordinator) render(coordinator.getState()); };
   const onStatusFilter = () => { if (coordinator) render(coordinator.getState()); };
   const onCreate = () => { if (editor) void editor.openCreate(); };
-  const onLogout = () => { if (sessionService) void sessionService.logout(); };
+  const onLogout = () => {
+    drawer.close();
+    if (sessionService) void sessionService.logout();
+  };
 
   return Object.freeze({
     activate() {
@@ -258,7 +475,7 @@ export function createAdminPageActivation(options = {}) {
             editor = createEditor({
               elements: editorElements(elements.root),
               documentLike,
-              windowLike: options.windowLike ?? globalThis,
+              windowLike,
               recipeSource,
               mutationService,
               taxonomySource,
@@ -276,10 +493,12 @@ export function createAdminPageActivation(options = {}) {
           }
           sessionService = createSessionService(client);
           unsubscribeCoordinator = coordinator.subscribe((state) => {
+            if (state.status !== ADMIN_CMS_STATUS.READY) drawer.close();
             editor?.setAuthorization(state.status === ADMIN_CMS_STATUS.READY, currentUserId);
             render(state);
           });
           unsubscribeSession = sessionService.subscribe((state) => {
+            drawer.close();
             currentUserId = state?.status === 'authenticated' && typeof state?.user?.id === 'string'
               ? state.user.id
               : null;
@@ -314,6 +533,7 @@ export function createAdminPageActivation(options = {}) {
       try { sessionService?.cleanup?.(); } catch { /* Auth cleanup stays isolated. */ }
       try { coordinator?.cleanup?.(); } catch { /* Admin cleanup stays isolated. */ }
       try { editor?.cleanup?.(); } catch { /* Editor cleanup stays isolated. */ }
+      try { drawer.cleanup(); } catch { /* Drawer cleanup restores workspace interaction. */ }
       currentUserId = null;
       if (listenersInstalled) {
         try { elements.search.removeEventListener('input', onSearch); } catch { /* DOM cleanup stays isolated. */ }

@@ -11,19 +11,39 @@
   <link rel="stylesheet" href="admin.css">
 </head>
 <body>
-  <a class="skip-link" href="#admin-content">Skip to admin content</a>
-  <main class="admin-shell" id="admin-content" data-admin-app data-admin-state="loading" aria-busy="true">
-    <header class="admin-header">
-      <a class="auth-brand" href="index.html" aria-label="RecipeFinder dashboard">
-        <span class="auth-brand-mark" aria-hidden="true">♨</span>
-        <span class="auth-brand-copy"><strong>Recipe<span>Finder</span></strong><small>ADMIN CMS</small></span>
-      </a>
-      <nav class="admin-actions" aria-label="Admin account actions">
-        <a class="secondary-link" href="login.html" data-admin-sign-in hidden>Sign in</a>
-        <button class="secondary-link admin-logout" type="button" data-admin-logout hidden>Sign out</button>
-        <a class="secondary-link" href="index.html">Dashboard</a>
+  <div class="admin-shell" data-admin-app data-admin-state="loading" data-drawer-open="false" aria-busy="true">
+    <aside class="admin-sidebar" id="admin-sidebar" data-admin-sidebar aria-label="Admin menu" aria-hidden="true" inert>
+      <div class="admin-sidebar-heading">
+        <a class="auth-brand" href="index.html" aria-label="RecipeFinder dashboard">
+          <span class="auth-brand-mark" aria-hidden="true">♨</span>
+          <span class="auth-brand-copy"><strong>Recipe<span>Finder</span></strong><small>ADMIN CMS</small></span>
+        </a>
+        <button class="admin-icon-button admin-drawer-close" type="button" data-admin-menu-close aria-label="Close Admin menu">&times;</button>
+      </div>
+      <nav class="admin-navigation" aria-label="Admin navigation">
+        <a class="admin-nav-link is-active" href="admin.html" aria-current="page"><span aria-hidden="true">▦</span>Recipe Catalog</a>
+        <a class="admin-nav-link" href="index.html"><span aria-hidden="true">⌂</span>Dashboard</a>
       </nav>
-    </header>
+      <div class="admin-account" aria-label="Admin account actions">
+        <p class="admin-account-label">Account</p>
+        <div class="admin-actions">
+          <a class="secondary-link" href="login.html" data-admin-sign-in hidden>Sign in</a>
+          <button class="secondary-link admin-logout" type="button" data-admin-logout hidden>Sign out</button>
+        </div>
+      </div>
+    </aside>
+    <button class="admin-drawer-backdrop" type="button" data-admin-menu-backdrop aria-label="Close Admin menu" tabindex="-1" hidden></button>
+
+    <div class="admin-workspace" data-admin-workspace>
+      <a class="skip-link" href="#admin-content">Skip to admin content</a>
+      <header class="admin-mobile-header">
+        <div class="admin-mobile-brand" aria-label="RecipeFinder Admin CMS">
+          <span class="auth-brand-mark" aria-hidden="true">♨</span>
+          <span><strong>Recipe<span>Finder</span></strong><small>ADMIN CMS</small></span>
+        </div>
+        <button class="admin-menu-toggle" type="button" data-admin-menu-toggle aria-label="Open Admin menu" aria-expanded="false" aria-controls="admin-sidebar"><span aria-hidden="true">&#9776;</span></button>
+      </header>
+      <main class="admin-main" id="admin-content">
 
     <section class="admin-card" aria-labelledby="admin-title">
       <div class="admin-intro">
@@ -80,7 +100,9 @@
         <div class="admin-editor-actions"><button class="admin-secondary-button" type="button" data-admin-editor-cancel>Cancel</button><button class="admin-primary-button" type="submit" data-admin-editor-save>Save draft</button></div>
       </form>
     </section>
-  </main>
+      </main>
+    </div>
+  </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script type="module" src="js/admin-browser.js"></script>
 </body>

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { ADMIN_CMS_STATUS, createAdminCmsCoordinator } from '../js/admin-cms.js';
 import {
+  createAdminDrawerController,
   createAdminPageActivation,
   filterAdminRecipes,
   renderAdminCmsState,
@@ -251,14 +252,19 @@ assert.equal(cleanupRefresh.getState().status, ADMIN_CMS_STATUS.RETIRED);
 function element() {
   const listeners = new Map();
   return {
-    hidden: false, disabled: false, textContent: '', value: '', dataset: {}, children: [],
+    hidden: false, disabled: false, inert: false, textContent: '', value: '', dataset: {}, children: [], focusables: [],
     classList: { toggle(name, value) { this[name] = value; } },
-    setAttribute(name, value) { this[name] = value; },
+    setAttribute(name, value) { this[name] = name === 'inert' ? true : value; },
+    removeAttribute(name) { if (name === 'inert') this.inert = false; else delete this[name]; },
+    getAttribute(name) { return this[name] ?? null; },
     append(child) { this.children.push(child); },
     replaceChildren() { this.children = []; },
     addEventListener(name, listener) { listeners.set(name, listener); },
     removeEventListener(name, listener) { if (listeners.get(name) === listener) listeners.delete(name); },
-    emit(name) { listeners.get(name)?.(); },
+    emit(name, event = {}) { return listeners.get(name)?.(event); },
+    querySelectorAll() { return this.focusables; },
+    querySelector(selector) { return selector === '[aria-current="page"]' ? this.activeLink ?? null : null; },
+    focus() { this.ownerDocument && (this.ownerDocument.activeElement = this); this.focused = true; },
   };
 }
 const elements = {
@@ -327,10 +333,217 @@ for (const status of [ADMIN_CMS_STATUS.DENIED, ADMIN_CMS_STATUS.ERROR]) {
   assert.equal(elements.rows.children.length, 0, `${status} state must clear catalog rows`);
 }
 
+function mediaQuery(initialMatches) {
+  const listeners = new Set();
+  return {
+    matches: initialMatches,
+    addEventListener(type, listener) { if (type === 'change') listeners.add(listener); },
+    removeEventListener(type, listener) { if (type === 'change') listeners.delete(listener); },
+    emit(matches) {
+      this.matches = matches;
+      for (const listener of [...listeners]) listener({ matches });
+    },
+    listenerCount() { return listeners.size; },
+  };
+}
+
+function animationFrames() {
+  let nextId = 1;
+  const callbacks = new Map();
+  return {
+    request(callback) {
+      const id = nextId;
+      nextId += 1;
+      callbacks.set(id, callback);
+      return id;
+    },
+    cancel(id) { callbacks.delete(id); },
+    flush() {
+      for (const [id, callback] of [...callbacks]) {
+        callbacks.delete(id);
+        callback(0);
+      }
+    },
+    size() { return callbacks.size; },
+  };
+}
+
+const drawerDocumentListeners = new Map();
+const drawerDocument = {
+  activeElement: null,
+  body: element(),
+  addEventListener(name, listener) { drawerDocumentListeners.set(name, listener); },
+  removeEventListener(name, listener) { if (drawerDocumentListeners.get(name) === listener) drawerDocumentListeners.delete(name); },
+  emit(name, event) { drawerDocumentListeners.get(name)?.(event); },
+};
+const drawerElements = {
+  root: element(), sidebar: element(), workspace: element(), menuToggle: element(),
+  menuClose: element(), menuBackdrop: element(),
+};
+const drawerNavigation = element();
+const drawerLogout = element();
+for (const item of [drawerElements.menuToggle, drawerElements.menuClose, drawerNavigation, drawerLogout]) {
+  item.ownerDocument = drawerDocument;
+}
+drawerElements.sidebar.focusables = [drawerElements.menuClose, drawerNavigation, drawerLogout];
+drawerElements.sidebar.activeLink = drawerNavigation;
+drawerDocument.activeElement = drawerElements.menuToggle;
+let activeElementWhenWorkspaceHidden = null;
+const setWorkspaceAttribute = drawerElements.workspace.setAttribute;
+drawerElements.workspace.setAttribute = function setAttributeWithFocusObservation(name, value) {
+  if (name === 'aria-hidden' && value === 'true') {
+    activeElementWhenWorkspaceHidden = drawerDocument.activeElement;
+  }
+  return setWorkspaceAttribute.call(this, name, value);
+};
+const mobileMedia = mediaQuery(true);
+const drawerFrames = animationFrames();
+const drawer = createAdminDrawerController({
+  elements: drawerElements,
+  documentLike: drawerDocument,
+  windowLike: {
+    matchMedia() { return mobileMedia; },
+    requestAnimationFrame(callback) { return drawerFrames.request(callback); },
+    cancelAnimationFrame(id) { drawerFrames.cancel(id); },
+  },
+});
+assert.equal(drawer.isMobile(), true);
+assert.equal(drawerElements.sidebar.inert, true, 'Closed mobile drawer must be inert');
+assert.equal(drawerElements.sidebar['aria-hidden'], 'true');
+assert.equal(drawerElements.menuToggle['aria-expanded'], 'false');
+drawerElements.menuToggle.emit('click');
+assert.equal(drawer.isOpen(), true);
+assert.equal(drawer.open(), false, 'Repeated opening attempts are suppressed while focus is pending');
+assert.equal(drawerFrames.size(), 1, 'Opening schedules one rendering-frame focus attempt');
+assert.equal(drawerElements.root.dataset.drawerOpen, 'true');
+assert.equal(drawerElements.sidebar.inert, false);
+assert.equal(drawerElements.sidebar.role, 'dialog');
+assert.equal(drawerElements.sidebar['aria-modal'], undefined, 'Modal state waits until focus enters the drawer');
+assert.equal(drawerElements.workspace.inert, false, 'Workspace remains available until drawer focus succeeds');
+drawerFrames.flush();
+assert.equal(drawerFrames.size(), 1, 'The first rendering frame schedules the focus frame');
+assert.equal(drawerDocument.activeElement, drawerElements.menuToggle, 'The first rendering frame does not move focus');
+assert.equal(drawerElements.sidebar['aria-modal'], undefined);
+assert.equal(drawerElements.workspace.inert, false, 'The first rendering frame does not hide the workspace');
+drawerFrames.flush();
+assert.equal(drawerElements.sidebar['aria-modal'], 'true');
+assert.equal(drawerElements.workspace.inert, true, 'Open modal drawer must make the workspace inert');
+assert.equal(drawerElements.menuBackdrop.hidden, false);
+assert.equal(drawerDocument.activeElement, drawerElements.menuClose, 'Opening moves focus into the drawer');
+assert.equal(activeElementWhenWorkspaceHidden, drawerElements.menuClose, 'Focus must enter the drawer before the workspace is aria-hidden');
+let prevented = false;
+drawerLogout.focus();
+drawerDocument.emit('keydown', { key: 'Tab', shiftKey: false, preventDefault() { prevented = true; } });
+assert.equal(prevented, true);
+assert.equal(drawerDocument.activeElement, drawerElements.menuClose, 'Forward Tab wraps to the first drawer control');
+prevented = false;
+drawerElements.menuClose.focus();
+drawerDocument.emit('keydown', { key: 'Tab', shiftKey: true, preventDefault() { prevented = true; } });
+assert.equal(prevented, true);
+assert.equal(drawerDocument.activeElement, drawerLogout, 'Reverse Tab wraps to the last drawer control');
+drawerDocument.emit('keydown', { key: 'Escape', preventDefault() {} });
+assert.equal(drawer.isOpen(), false);
+assert.equal(drawerElements.workspace.inert, false);
+assert.equal(drawerElements.sidebar.inert, true);
+assert.equal(drawerDocument.activeElement, drawerElements.menuToggle, 'Escape restores focus to the toggle');
+drawer.open();
+drawerFrames.flush();
+drawerFrames.flush();
+drawerElements.menuBackdrop.emit('click');
+assert.equal(drawer.isOpen(), false, 'Backdrop closes the drawer');
+drawer.open();
+drawerFrames.flush();
+drawerFrames.flush();
+drawerElements.menuClose.emit('click');
+assert.equal(drawer.isOpen(), false, 'Close button closes the drawer');
+drawer.open();
+drawerFrames.flush();
+drawerFrames.flush();
+mobileMedia.emit(false);
+assert.equal(drawer.isMobile(), false);
+assert.equal(drawer.isOpen(), false);
+assert.equal(drawerElements.sidebar.inert, false, 'Desktop sidebar remains keyboard accessible');
+assert.equal(drawerElements.sidebar.role, 'complementary');
+assert.equal(drawerElements.workspace.inert, false);
+assert.equal(drawerDocument.activeElement, drawerNavigation, 'Desktop transition moves focus away from the hidden close button');
+mobileMedia.emit(true);
+assert.equal(drawerElements.sidebar.inert, true, 'Returning to mobile resets to a closed drawer');
+drawer.open();
+assert.equal(drawerFrames.size(), 1);
+mobileMedia.emit(false);
+assert.equal(drawerFrames.size(), 0, 'Breakpoint changes cancel the first pending drawer frame');
+assert.equal(drawerElements.workspace.inert, false);
+assert.equal(drawerElements.sidebar.inert, false);
+mobileMedia.emit(true);
+drawer.open();
+assert.equal(drawerFrames.size(), 1);
+drawerFrames.flush();
+assert.equal(drawerFrames.size(), 1, 'The second drawer frame remains independently cancellable');
+assert.equal(drawer.close(), true, 'Lifecycle closure cancels an opening drawer');
+assert.equal(drawerFrames.size(), 0);
+assert.equal(drawerElements.workspace.inert, false);
+drawer.open();
+assert.equal(drawerFrames.size(), 1);
+assert.equal(drawer.cleanup(), true);
+assert.equal(drawerFrames.size(), 0, 'Cleanup cancels a pending opening frame');
+assert.equal(drawer.cleanup(), false);
+assert.equal(drawerElements.workspace.inert, false, 'Cleanup must never leave the workspace inert');
+assert.equal(drawerElements.sidebar.inert, true, 'Cleanup keeps the hidden mobile drawer unfocusable');
+assert.equal(drawerDocument.body.classList['admin-drawer-open'], false, 'Cleanup reverses body scroll locking');
+assert.equal(drawerDocumentListeners.has('keydown'), false);
+assert.equal(mobileMedia.listenerCount(), 0);
+
+const failedFocusDocument = {
+  activeElement: null,
+  body: element(),
+  addEventListener() {},
+  removeEventListener() {},
+};
+const failedFocusElements = {
+  root: element(), sidebar: element(), workspace: element(), menuToggle: element(),
+  menuClose: element(), menuBackdrop: element(),
+};
+for (const item of [failedFocusElements.menuToggle, failedFocusElements.menuClose]) {
+  item.ownerDocument = failedFocusDocument;
+}
+failedFocusDocument.activeElement = failedFocusElements.menuToggle;
+failedFocusElements.menuClose.focus = () => {};
+const failedFocusMedia = mediaQuery(true);
+const failedFocusFrames = animationFrames();
+const failedFocusDrawer = createAdminDrawerController({
+  elements: failedFocusElements,
+  documentLike: failedFocusDocument,
+  windowLike: {
+    matchMedia() { return failedFocusMedia; },
+    requestAnimationFrame(callback) { return failedFocusFrames.request(callback); },
+    cancelAnimationFrame(id) { failedFocusFrames.cancel(id); },
+  },
+});
+assert.equal(failedFocusDrawer.open(), true, 'Opening begins by exposing the drawer');
+assert.equal(failedFocusElements.sidebar.inert, false);
+assert.equal(failedFocusElements.workspace.inert, false);
+failedFocusFrames.flush();
+assert.equal(failedFocusDrawer.isOpen(), true, 'The first frame cannot trigger premature rollback');
+assert.equal(failedFocusElements.workspace.inert, false);
+failedFocusFrames.flush();
+assert.equal(failedFocusDrawer.isOpen(), false, 'Failed focus rolls the drawer back closed');
+assert.equal(failedFocusElements.root.dataset.drawerOpen, 'false');
+assert.equal(failedFocusElements.menuToggle['aria-expanded'], 'false');
+assert.equal(failedFocusElements.sidebar.inert, true);
+assert.equal(failedFocusElements.sidebar['aria-hidden'], 'true');
+assert.equal(failedFocusElements.sidebar['aria-modal'], undefined);
+assert.equal(failedFocusElements.workspace.inert, false, 'Failed focus never hides the workspace');
+assert.equal(failedFocusElements.workspace['aria-hidden'], undefined);
+assert.equal(failedFocusElements.menuBackdrop.hidden, true);
+assert.equal(failedFocusDocument.body.classList['admin-drawer-open'], false);
+assert.equal(failedFocusDocument.activeElement, failedFocusElements.menuToggle, 'Failed focus restores the original toggle');
+assert.equal(failedFocusDrawer.cleanup(), true);
+
 const pageElements = {
   root: element(), status: element(), content: element(), rows: element(), empty: element(),
   search: element(), statusFilter: element(), count: element(), create: element(),
-  signIn: element(), logout: element(),
+  signIn: element(), logout: element(), sidebar: element(), workspace: element(),
+  menuToggle: element(), menuClose: element(), menuBackdrop: element(),
 };
 pageElements.statusFilter.value = 'all';
 const pageSelectors = new Map([
@@ -344,6 +557,11 @@ const pageSelectors = new Map([
   ['[data-admin-create]', pageElements.create],
   ['[data-admin-sign-in]', pageElements.signIn],
   ['[data-admin-logout]', pageElements.logout],
+  ['[data-admin-sidebar]', pageElements.sidebar],
+  ['[data-admin-workspace]', pageElements.workspace],
+  ['[data-admin-menu-toggle]', pageElements.menuToggle],
+  ['[data-admin-menu-close]', pageElements.menuClose],
+  ['[data-admin-menu-backdrop]', pageElements.menuBackdrop],
 ]);
 pageElements.root.querySelector = (selector) => pageSelectors.get(selector) ?? null;
 const pageDocument = {
@@ -361,6 +579,8 @@ let pageRecipeRows = recipes;
 let pageRecipeLoads = 0;
 let optionalSavedObservers = 0;
 let optionalAuthorizationObservers = 0;
+let drawerCloseCount = 0;
+let drawerCleanupCount = 0;
 const page = createAdminPageActivation({
   documentLike: pageDocument,
   sdk: {},
@@ -369,6 +589,15 @@ const page = createAdminPageActivation({
     ownerCreations += 1;
     assert.equal(options.profile, 'application-session');
     return { initialize(profile) { assert.equal(profile, 'application-session'); return sharedClient; } };
+  },
+  createDrawer({ elements: drawerPageElements }) {
+    assert.equal(drawerPageElements.root, pageElements.root);
+    assert.equal(drawerPageElements.sidebar, pageElements.sidebar);
+    assert.equal(drawerPageElements.workspace, pageElements.workspace);
+    return {
+      close() { drawerCloseCount += 1; return true; },
+      cleanup() { drawerCleanupCount += 1; return true; },
+    };
   },
   createAccessService(client) {
     acceptedClients.push(client);
@@ -450,17 +679,37 @@ assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.DENIED);
 assert.equal(pageElements.rows.children.length, 0, 'Authorization loss must clear privileged catalog rows');
 assert.equal(optionalAuthorizationObservers, 1);
 pageAccessStatus = ADMIN_ACCESS_STATUS.AUTHORIZED;
+const drawerClosesBeforeSwitch = drawerCloseCount;
+sessionListener({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_B } });
+await new Promise((resolve) => setImmediate(resolve));
+assert.ok(drawerCloseCount > drawerClosesBeforeSwitch, 'Direct account switching closes the drawer');
 pageElements.logout.emit('click');
 await Promise.resolve();
+assert.ok(drawerCloseCount >= 3, 'Loading, authentication changes, and logout close the drawer safely');
 assert.deepEqual(editorAuthorizations.at(-1), [false, null]);
 assert.equal(pageElements.signIn.hidden, false);
 assert.equal(pageElements.logout.hidden, true);
 assert.equal(page.cleanup(), true);
 assert.equal(page.cleanup(), false);
+assert.equal(drawerCleanupCount, 1);
 assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.RETIRED);
 
 const html = await readFile(new URL('../admin.html', import.meta.url), 'utf8');
 assert.match(html, /data-admin-app/);
+assert.match(html, /<aside class="admin-sidebar"[^>]+data-admin-sidebar[^>]+inert>/);
+assert.match(html, /<nav class="admin-navigation" aria-label="Admin navigation">/);
+assert.match(html, /href="admin\.html" aria-current="page"/);
+assert.match(html, /href="index\.html"/);
+assert.match(html, /data-admin-menu-toggle[^>]+aria-expanded="false"[^>]+aria-controls="admin-sidebar"/);
+assert.match(html, /data-admin-menu-close[^>]+aria-label="Close Admin menu"/);
+assert.match(html, /data-admin-menu-backdrop/);
+assert.match(html, /data-admin-workspace/);
+assert.equal((html.match(/class="skip-link"/g) ?? []).length, 1, 'Skip link must not be duplicated');
+assert.match(html, /<div class="admin-workspace" data-admin-workspace>\s*<a class="skip-link" href="#admin-content">Skip to admin content<\/a>/, 'Skip link must be the first child inside the inert workspace boundary');
+assert.match(html, /<main class="admin-main" id="admin-content">/, 'Skip link destination must remain unchanged');
+assert.equal((html.match(/data-admin-sign-in/g) ?? []).length, 1, 'Sign In control must not be duplicated');
+assert.equal((html.match(/data-admin-logout/g) ?? []).length, 1, 'Sign Out control must not be duplicated');
+assert.doesNotMatch(html, /Restore fake admin|Switch fake account|data-offline/i);
 assert.match(html, /data-admin-content hidden/);
 assert.match(html, /data-admin-search disabled/);
 assert.match(html, /<table>/, 'Desktop catalog remains a semantic table');
@@ -476,7 +725,12 @@ assert.match(html, /data-admin-create disabled/);
 assert.doesNotMatch(html, /\b(?:Delete|Publish|Unpublish)\b/);
 const css = await readFile(new URL('../admin.css', import.meta.url), 'utf8');
 assert.match(css, /background-position:right 16px center/);
-assert.match(css, /\.admin-actions\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+assert.match(css, /\.admin-shell\{[^}]*grid-template-columns:260px minmax\(0,1fr\)/);
+assert.match(css, /\.admin-sidebar\{[^}]*position:sticky;[^}]*height:100dvh/);
+assert.match(css, /\.admin-nav-link\[aria-current=page\]/);
+assert.match(css, /@media\(max-width:700px\)[\s\S]*?\.admin-sidebar\{position:fixed;[^}]*width:min\(270px,calc\(100vw - 48px\)\)/);
+assert.match(css, /body\.admin-drawer-open\{overflow:hidden\}/);
+assert.match(css, /@media\(prefers-reduced-motion:no-preference\)[\s\S]*?\.admin-sidebar\{transition:/);
 assert.match(css, /table\{width:100%;border-collapse:collapse;min-width:760px\}/, 'Desktop minimum width remains unchanged');
 assert.match(css, /@media\(max-width:700px\)[\s\S]*?\.admin-table-wrap\{overflow-x:visible/);
 assert.match(css, /@media\(max-width:700px\)[\s\S]*?\.admin-table-wrap table\{display:block;min-width:0\}/);
