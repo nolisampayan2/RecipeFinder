@@ -284,11 +284,48 @@ assert.equal(elements.content.hidden, false);
 assert.equal(elements.rows.children.length, 1);
 assert.equal(elements.rows.children[0].children[0].textContent, 'Safe <Recipe>');
 assert.equal('innerHTML' in elements.rows.children[0].children[0], false);
+assert.equal(elements.rows.children[0].children[0].headers, 'admin-recipe-column');
+assert.equal(elements.rows.children[0].children[0]['data-label'], 'Recipe');
+assert.equal(elements.rows.children[0].children[1].headers, 'admin-category-column');
+assert.equal(elements.rows.children[0].children[1]['data-label'], 'Category');
+assert.equal(elements.rows.children[0].children[2].headers, 'admin-cuisine-column');
+assert.equal(elements.rows.children[0].children[2]['data-label'], 'Cuisine');
+assert.equal(elements.rows.children[0].children[3].headers, 'admin-status-column');
+assert.equal(elements.rows.children[0].children[3]['data-label'], 'Status');
+assert.equal(elements.rows.children[0].children[4].headers, 'admin-action-column');
+assert.equal(elements.rows.children[0].children[4]['data-label'], 'Action');
 assert.equal(filterAdminRecipes(recipes, 'filipino').length, 1);
 assert.equal(filterAdminRecipes(recipes, 'published').length, 0);
 assert.equal(filterAdminRecipes(recipes, '', 'draft').length, 1);
 assert.equal(elements.count.textContent, '1 recipe');
 assert.equal(elements.create.disabled, true, 'Live activation remains read only without injected fake services');
+
+const longName = `Long <Recipe> & safe ${'name '.repeat(45)}`.trim();
+const mobileRecipes = Object.freeze([
+  Object.freeze({ id: 'cms:mobile-draft', name: longName, category: 'Dinner', cuisine: 'Filipino', status: 'draft' }),
+  Object.freeze({ id: 'cms:published', name: 'Published CMS Recipe', category: 'Lunch', cuisine: 'Filipino', status: 'published' }),
+  Object.freeze({ id: 'external:provider:one', name: 'External Draft', category: 'Lunch', cuisine: 'Other', status: 'draft' }),
+]);
+const editedRecipeIds = [];
+const mobileEditor = { openEdit(id) { editedRecipeIds.push(id); return Promise.resolve(true); } };
+assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.READY, recipes: mobileRecipes }, fakeDocument, '', 'all', mobileEditor), true);
+assert.equal(elements.rows.children.length, 3);
+assert.equal(elements.rows.children[0].children[0].textContent, longName, 'Long names remain complete text content');
+assert.equal('innerHTML' in elements.rows.children[0].children[0], false, 'Recipe text is never interpreted as markup');
+const editableAction = elements.rows.children[0].children[4].children[0];
+assert.equal(editableAction.disabled, false);
+editableAction.emit('click');
+assert.deepEqual(editedRecipeIds, ['cms:mobile-draft'], 'Edit action must retain the exact recipe identity');
+assert.equal(elements.rows.children[1].children[4].children[0].disabled, true, 'Published recipes remain read only');
+assert.equal(elements.rows.children[2].children[4].children[0].disabled, true, 'Non-CMS recipes remain read only');
+assert.equal(elements.count.textContent, '3 recipes');
+assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.READY, recipes: mobileRecipes }, fakeDocument, 'external', 'draft', mobileEditor), true);
+assert.equal(elements.rows.children.length, 1, 'Search and status filtering continue to share the same row renderer');
+assert.equal(elements.count.textContent, '1 of 3 recipes');
+for (const status of [ADMIN_CMS_STATUS.DENIED, ADMIN_CMS_STATUS.ERROR]) {
+  assert.equal(renderAdminCmsState(elements, { status, recipes: mobileRecipes }, fakeDocument, '', 'all', mobileEditor), true);
+  assert.equal(elements.rows.children.length, 0, `${status} state must clear catalog rows`);
+}
 
 const pageElements = {
   root: element(), status: element(), content: element(), rows: element(), empty: element(),
@@ -426,13 +463,29 @@ const html = await readFile(new URL('../admin.html', import.meta.url), 'utf8');
 assert.match(html, /data-admin-app/);
 assert.match(html, /data-admin-content hidden/);
 assert.match(html, /data-admin-search disabled/);
+assert.match(html, /<table>/, 'Desktop catalog remains a semantic table');
+assert.match(html, /<caption class="sr-only">RecipeFinder recipe administration catalog<\/caption>/);
+assert.match(html, /<tbody data-admin-rows><\/tbody>/);
 assert.match(html, /data-admin-editor-form/);
 assert.match(html, /data-error-for="form"/);
+for (const id of [
+  'admin-recipe-column', 'admin-category-column', 'admin-cuisine-column',
+  'admin-status-column', 'admin-action-column',
+]) assert.match(html, new RegExp(`<th id="${id}" scope="col">`), `${id} must remain a semantic column header`);
 assert.match(html, /data-admin-create disabled/);
 assert.doesNotMatch(html, /\b(?:Delete|Publish|Unpublish)\b/);
 const css = await readFile(new URL('../admin.css', import.meta.url), 'utf8');
 assert.match(css, /background-position:right 16px center/);
 assert.match(css, /\.admin-actions\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+assert.match(css, /table\{width:100%;border-collapse:collapse;min-width:760px\}/, 'Desktop minimum width remains unchanged');
+assert.match(css, /@media\(max-width:700px\)[\s\S]*?\.admin-table-wrap\{overflow-x:visible/);
+assert.match(css, /@media\(max-width:700px\)[\s\S]*?\.admin-table-wrap table\{display:block;min-width:0\}/);
+assert.match(css, /\.admin-table-wrap tbody tr\{[^}]*text-align:left\}/);
+assert.match(css, /\.admin-table-wrap tbody td\{[^}]*justify-items:start;[^}]*width:100%;[^}]*text-align:left;/);
+assert.match(css, /\.admin-table-wrap tbody td::before\{display:block;content:attr\(data-label\);[^}]*text-align:left;/);
+assert.match(css, /\.admin-table-wrap tbody td\.admin-recipe-name\{[^}]*width:100%;[^}]*text-align:left\}/);
+assert.match(css, /\.admin-table-wrap tbody td \.status-badge\{justify-self:start\}/);
+assert.match(css, /\.admin-table-wrap \.admin-row-action\{width:100%;min-height:44px\}/);
 const browserSource = await readFile(new URL('../js/admin-browser.js', import.meta.url), 'utf8');
 assert.doesNotMatch(browserSource, /innerHTML|insertAdjacentHTML|document\.write|service_role|\.insert\s*\(|\.update\s*\(|\.delete\s*\(|\.upsert\s*\(/i);
 assert.doesNotMatch(browserSource, /supabase-admin-recipe-mutations|supabase-admin-taxonomies/);

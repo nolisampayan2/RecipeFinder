@@ -83,10 +83,13 @@ export function filterAdminRecipes(recipes, query, status = 'all') {
   }));
 }
 
-function appendCell(documentLike, row, value) {
+function appendCell(documentLike, row, value, headerId, label) {
   const cell = documentLike.createElement('td');
   cell.textContent = value;
+  cell.setAttribute('headers', headerId);
+  cell.setAttribute('data-label', label);
   row.append(cell);
+  return cell;
 }
 
 function observeCallback(callback, value) {
@@ -148,16 +151,21 @@ export function renderAdminCmsState(
     if (ready) {
       for (const recipe of recipes) {
         const row = documentLike.createElement('tr');
-        appendCell(documentLike, row, recipe.name);
-        appendCell(documentLike, row, recipe.category);
-        appendCell(documentLike, row, recipe.cuisine);
+        const nameCell = appendCell(documentLike, row, recipe.name, 'admin-recipe-column', 'Recipe');
+        nameCell.className = 'admin-recipe-name';
+        appendCell(documentLike, row, recipe.category, 'admin-category-column', 'Category');
+        appendCell(documentLike, row, recipe.cuisine, 'admin-cuisine-column', 'Cuisine');
         const statusCell = documentLike.createElement('td');
+        statusCell.setAttribute('headers', 'admin-status-column');
+        statusCell.setAttribute('data-label', 'Status');
         const badge = documentLike.createElement('span');
         badge.className = `status-badge is-${recipe.status}`;
         badge.textContent = recipe.status === 'published' ? 'Published' : 'Draft';
         statusCell.append(badge);
         row.append(statusCell);
         const actionCell = documentLike.createElement('td');
+        actionCell.setAttribute('headers', 'admin-action-column');
+        actionCell.setAttribute('data-label', 'Action');
         const edit = documentLike.createElement('button');
         edit.type = 'button';
         edit.className = 'admin-row-action';
