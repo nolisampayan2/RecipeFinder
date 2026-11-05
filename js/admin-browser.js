@@ -89,6 +89,14 @@ function appendCell(documentLike, row, value) {
   row.append(cell);
 }
 
+function observeCallback(callback, value) {
+  try {
+    Promise.resolve(typeof callback === 'function' ? callback(value) : undefined).catch(() => {});
+  } catch {
+    // Optional observers cannot interrupt the page lifecycle.
+  }
+}
+
 export function renderAdminCmsState(
   elements,
   state,
@@ -248,7 +256,14 @@ export function createAdminPageActivation(options = {}) {
               taxonomySource,
               createRecipeId: options.createRecipeId,
               confirmDiscard: options.confirmDiscard,
-              onSaved: options.onSaved,
+              onSaved: (recipe) => {
+                try { Promise.resolve(coordinator.refreshRecipes()).catch(() => {}); } catch { /* Refresh fails closed. */ }
+                observeCallback(options.onSaved, recipe);
+              },
+              onAuthorizationLost: () => {
+                try { Promise.resolve(coordinator.refreshRecipes()).catch(() => {}); } catch { /* Refresh fails closed. */ }
+                observeCallback(options.onAuthorizationLost);
+              },
             });
           }
           sessionService = createSessionService(client);

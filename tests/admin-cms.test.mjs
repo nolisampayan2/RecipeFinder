@@ -127,6 +127,127 @@ cleanupAccess.resolve({ status: ADMIN_ACCESS_STATUS.AUTHORIZED });
 await cleanupRequest;
 assert.equal(cleanup.getState().status, ADMIN_CMS_STATUS.RETIRED);
 
+const refreshedRecipes = Object.freeze([Object.freeze({
+  id: 'cms:two', name: 'Refreshed Draft', category: 'Lunch', cuisine: 'Filipino', status: 'draft',
+})]);
+let refreshRows = recipes;
+const refreshDeps = dependencies({
+  access: { status: ADMIN_ACCESS_STATUS.AUTHORIZED },
+  recipes: () => Promise.resolve({ data: refreshRows, error: null }),
+});
+const refreshing = createAdminCmsCoordinator(refreshDeps);
+await refreshing.acceptAuthState({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_A } });
+refreshRows = refreshedRecipes;
+assert.equal(await refreshing.refreshRecipes(), true);
+assert.deepEqual(refreshing.getState(), { status: ADMIN_CMS_STATUS.READY, recipes: refreshedRecipes });
+assert.equal(refreshDeps.counts.access, 2, 'Refresh must reverify administrator access');
+assert.equal(refreshDeps.counts.recipes, 2, 'Refresh must replace the catalog through the recipe source');
+
+const duplicateRefreshAccess = deferred();
+let duplicateAccessCount = 0;
+const duplicateRefreshDeps = dependencies({
+  access: () => {
+    duplicateAccessCount += 1;
+    return duplicateAccessCount === 1
+      ? Promise.resolve({ status: ADMIN_ACCESS_STATUS.AUTHORIZED })
+      : duplicateRefreshAccess.promise;
+  },
+  recipes: { data: recipes, error: null },
+});
+const duplicateRefresh = createAdminCmsCoordinator(duplicateRefreshDeps);
+await duplicateRefresh.acceptAuthState({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_A } });
+const firstRefresh = duplicateRefresh.refreshRecipes();
+const secondRefresh = duplicateRefresh.refreshRecipes();
+assert.equal(firstRefresh, secondRefresh, 'Concurrent refreshes must share one authorization request');
+duplicateRefreshAccess.resolve({ status: ADMIN_ACCESS_STATUS.AUTHORIZED });
+await firstRefresh;
+assert.equal(duplicateRefreshDeps.counts.access, 2);
+assert.equal(duplicateRefreshDeps.counts.recipes, 2);
+
+for (const [access, expectedStatus] of [
+  [{ status: ADMIN_ACCESS_STATUS.DENIED }, ADMIN_CMS_STATUS.DENIED],
+  [{ status: ADMIN_ACCESS_STATUS.UNAVAILABLE }, ADMIN_CMS_STATUS.ERROR],
+]) {
+  let checkCount = 0;
+  const deps = dependencies({
+    access: () => Promise.resolve(checkCount++ === 0
+      ? { status: ADMIN_ACCESS_STATUS.AUTHORIZED }
+      : access),
+    recipes: { data: recipes, error: null },
+  });
+  const coordinator = createAdminCmsCoordinator(deps);
+  await coordinator.acceptAuthState({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_A } });
+  assert.equal(await coordinator.refreshRecipes(), true);
+  assert.equal(coordinator.getState().status, expectedStatus);
+  assert.deepEqual(coordinator.getState().recipes, [], 'Refresh failures must clear privileged rows');
+  assert.equal(deps.counts.recipes, 1, 'Denied or unavailable refresh authorization must not query recipes');
+}
+
+let providerRecipeCount = 0;
+const providerFailureDeps = dependencies({
+  access: () => Promise.resolve({ status: ADMIN_ACCESS_STATUS.AUTHORIZED }),
+  recipes: () => Promise.resolve(providerRecipeCount++ === 0
+    ? { data: recipes, error: null }
+    : { data: null, error: { message: 'PRIVATE provider failure' } }),
+});
+const providerFailure = createAdminCmsCoordinator(providerFailureDeps);
+await providerFailure.acceptAuthState({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_A } });
+assert.equal(await providerFailure.refreshRecipes(), true);
+assert.equal(providerFailure.getState().status, ADMIN_CMS_STATUS.ERROR);
+assert.deepEqual(providerFailure.getState().recipes, []);
+assert.equal(providerFailureDeps.counts.access, 2, 'Provider refresh failure occurs after reauthorization');
+assert.equal(providerFailureDeps.counts.recipes, 2, 'Provider refresh failure remains distinct from access denial');
+
+const lateRefreshAccess = deferred();
+let lateRefreshChecks = 0;
+const lateRefreshDeps = dependencies({
+  access: () => lateRefreshChecks++ === 0
+    ? Promise.resolve({ status: ADMIN_ACCESS_STATUS.AUTHORIZED })
+    : lateRefreshAccess.promise,
+  recipes: { data: recipes, error: null },
+});
+const lateRefresh = createAdminCmsCoordinator(lateRefreshDeps);
+await lateRefresh.acceptAuthState({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_A } });
+const lateRefreshRequest = lateRefresh.refreshRecipes();
+await lateRefresh.acceptAuthState({ status: AUTH_SESSION_STATUS.GUEST, user: null });
+lateRefreshAccess.resolve({ status: ADMIN_ACCESS_STATUS.AUTHORIZED });
+await lateRefreshRequest;
+assert.equal(lateRefresh.getState().status, ADMIN_CMS_STATUS.GUEST);
+assert.equal(lateRefreshDeps.counts.recipes, 1, 'A refresh completing after logout must not reload rows');
+
+const switchRefreshAccess = deferred();
+let switchRefreshChecks = 0;
+const switchRefreshDeps = dependencies({
+  access: () => switchRefreshChecks++ === 0
+    ? Promise.resolve({ status: ADMIN_ACCESS_STATUS.AUTHORIZED })
+    : switchRefreshAccess.promise,
+  recipes: { data: recipes, error: null },
+});
+const switchRefresh = createAdminCmsCoordinator(switchRefreshDeps);
+await switchRefresh.acceptAuthState({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_A } });
+const accountARefresh = switchRefresh.refreshRecipes();
+const accountBState = switchRefresh.acceptAuthState({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_B } });
+switchRefreshAccess.resolve({ status: ADMIN_ACCESS_STATUS.DENIED });
+await Promise.all([accountARefresh, accountBState]);
+assert.equal(switchRefresh.getState().status, ADMIN_CMS_STATUS.DENIED);
+assert.equal(switchRefreshDeps.counts.recipes, 1, 'Account A refresh must not load rows for Account B');
+
+const cleanupRefreshAccess = deferred();
+let cleanupRefreshChecks = 0;
+const cleanupRefreshDeps = dependencies({
+  access: () => cleanupRefreshChecks++ === 0
+    ? Promise.resolve({ status: ADMIN_ACCESS_STATUS.AUTHORIZED })
+    : cleanupRefreshAccess.promise,
+  recipes: { data: recipes, error: null },
+});
+const cleanupRefresh = createAdminCmsCoordinator(cleanupRefreshDeps);
+await cleanupRefresh.acceptAuthState({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_A } });
+const cleanupRefreshRequest = cleanupRefresh.refreshRecipes();
+assert.equal(cleanupRefresh.cleanup(), true);
+cleanupRefreshAccess.resolve({ status: ADMIN_ACCESS_STATUS.AUTHORIZED });
+await cleanupRefreshRequest;
+assert.equal(cleanupRefresh.getState().status, ADMIN_CMS_STATUS.RETIRED);
+
 function element() {
   const listeners = new Map();
   return {
@@ -197,6 +318,12 @@ const acceptedClients = [];
 const editorAuthorizations = [];
 let ownerCreations = 0;
 let sessionListener;
+let editorCallbacks;
+let pageAccessStatus = ADMIN_ACCESS_STATUS.AUTHORIZED;
+let pageRecipeRows = recipes;
+let pageRecipeLoads = 0;
+let optionalSavedObservers = 0;
+let optionalAuthorizationObservers = 0;
 const page = createAdminPageActivation({
   documentLike: pageDocument,
   sdk: {},
@@ -209,7 +336,7 @@ const page = createAdminPageActivation({
   createAccessService(client) {
     acceptedClients.push(client);
     return {
-      check: async () => ({ status: ADMIN_ACCESS_STATUS.AUTHORIZED }),
+      check: async () => ({ status: pageAccessStatus }),
       invalidate: () => true,
       cleanup: () => true,
     };
@@ -217,7 +344,7 @@ const page = createAdminPageActivation({
   createRecipeSource(client) {
     acceptedClients.push(client);
     return {
-      listAll: async () => ({ data: recipes, error: null }),
+      listAll: async () => { pageRecipeLoads += 1; return { data: pageRecipeRows, error: null }; },
       invalidate: () => true,
       cleanup: () => true,
     };
@@ -230,9 +357,10 @@ const page = createAdminPageActivation({
     acceptedClients.push(client);
     return { listCategories() {}, listCuisines() {}, invalidate() {}, cleanup() {} };
   },
-  createEditor({ mutationService, taxonomySource }) {
+  createEditor({ mutationService, taxonomySource, onSaved, onAuthorizationLost }) {
     assert.equal(typeof mutationService.createDraft, 'function');
     assert.equal(typeof taxonomySource.listCategories, 'function');
+    editorCallbacks = { onSaved, onAuthorizationLost };
     return {
       openCreate: async () => true,
       openEdit: async () => true,
@@ -252,6 +380,8 @@ const page = createAdminPageActivation({
       cleanup() { return true; },
     };
   },
+  async onSaved() { optionalSavedObservers += 1; throw new Error('Optional observer failure'); },
+  onAuthorizationLost() { optionalAuthorizationObservers += 1; throw new Error('Optional observer failure'); },
 });
 assert.equal(await page.activate(), true);
 await Promise.resolve();
@@ -263,10 +393,26 @@ assert.deepEqual(editorAuthorizations.at(-1), [true, USER_A]);
 assert.equal(pageElements.signIn.hidden, true);
 assert.equal(pageElements.logout.hidden, false);
 assert.equal(pageElements.rows.children.length, 1);
+pageRecipeRows = refreshedRecipes;
+editorCallbacks.onSaved({ id: 'cms:created' });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(pageRecipeLoads, 2, 'Confirmed create must trigger exactly one catalog refresh');
+assert.equal(pageElements.rows.children[0].children[0].textContent, 'Refreshed Draft');
+editorCallbacks.onSaved({ id: 'cms:edited' });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(pageRecipeLoads, 3, 'Confirmed edit must trigger exactly one catalog refresh');
+assert.equal(optionalSavedObservers, 2, 'Optional observers remain independent from both refreshes');
 pageElements.search.value = 'missing';
 pageElements.search.emit('input');
 assert.equal(pageElements.rows.children.length, 0);
 assert.equal(pageElements.empty.hidden, false);
+pageAccessStatus = ADMIN_ACCESS_STATUS.DENIED;
+editorCallbacks.onAuthorizationLost();
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.DENIED);
+assert.equal(pageElements.rows.children.length, 0, 'Authorization loss must clear privileged catalog rows');
+assert.equal(optionalAuthorizationObservers, 1);
+pageAccessStatus = ADMIN_ACCESS_STATUS.AUTHORIZED;
 pageElements.logout.emit('click');
 await Promise.resolve();
 assert.deepEqual(editorAuthorizations.at(-1), [false, null]);

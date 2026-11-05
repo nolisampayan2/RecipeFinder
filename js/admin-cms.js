@@ -28,6 +28,7 @@ export function createAdminCmsCoordinator({ adminAccess, recipeSource } = {}) {
   let retired = false;
   let currentUserId = null;
   let currentRequest = null;
+  let refreshRequest = null;
   const listeners = new Set();
 
   const publish = (nextState, expectedGeneration = generation) => {
@@ -69,6 +70,24 @@ export function createAdminCmsCoordinator({ adminAccess, recipeSource } = {}) {
     return attempt;
   };
 
+  const restartAuthorization = () => {
+    if (refreshRequest) return refreshRequest;
+    if (retired || !isValidAccountUserId(currentUserId) || state.status !== ADMIN_CMS_STATUS.READY) {
+      return Promise.resolve(false);
+    }
+    try { adminAccess.invalidate?.(); } catch { /* Refresh authorization fails closed. */ }
+    try { recipeSource.invalidate?.(); } catch { /* Older recipe reads stay rejected. */ }
+    generation += 1;
+    const userId = currentUserId;
+    publish(snapshot(ADMIN_CMS_STATUS.CHECKING));
+    const attempt = beginAuthorization(userId);
+    const refresh = attempt.finally(() => {
+      if (refreshRequest === refresh) refreshRequest = null;
+    });
+    refreshRequest = refresh;
+    return refresh;
+  };
+
   return Object.freeze({
     getState() { return state; },
 
@@ -103,6 +122,7 @@ export function createAdminCmsCoordinator({ adminAccess, recipeSource } = {}) {
         try { adminAccess.invalidate?.(); } catch { /* Stale provider work remains rejected locally. */ }
         try { recipeSource.invalidate?.(); } catch { /* Stale provider work remains rejected locally. */ }
         generation += 1;
+        refreshRequest = null;
         currentUserId = userId;
         publish(snapshot(ADMIN_CMS_STATUS.CHECKING));
         return beginAuthorization(userId);
@@ -111,6 +131,7 @@ export function createAdminCmsCoordinator({ adminAccess, recipeSource } = {}) {
       try { adminAccess.invalidate?.(); } catch { /* Auth transitions fail closed. */ }
       try { recipeSource.invalidate?.(); } catch { /* Auth transitions fail closed. */ }
       generation += 1;
+      refreshRequest = null;
       currentUserId = null;
       currentRequest = null;
       if (status === AUTH_SESSION_STATUS.GUEST) publish(snapshot(ADMIN_CMS_STATUS.GUEST));
@@ -120,10 +141,15 @@ export function createAdminCmsCoordinator({ adminAccess, recipeSource } = {}) {
       return Promise.resolve(true);
     },
 
+    refreshRecipes() {
+      return restartAuthorization();
+    },
+
     cleanup() {
       if (retired) return false;
       retired = true;
       generation += 1;
+      refreshRequest = null;
       currentUserId = null;
       currentRequest = null;
       listeners.clear();

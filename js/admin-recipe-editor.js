@@ -65,6 +65,7 @@ export function createAdminRecipeEditor({
   createRecipeId = fixedRecipeId,
   confirmDiscard = (message) => globalThis.confirm?.(message) === true,
   onSaved = () => {},
+  onAuthorizationLost = () => {},
 } = {}) {
   requireElements(elements);
   requireDependencies(recipeSource, mutationService, taxonomySource);
@@ -81,11 +82,28 @@ export function createAdminRecipeEditor({
   let retired = false;
   let generation = 0;
   let ingredientRows = [];
-  const listeners = [];
+  const listeners = new Set();
 
   const listen = (target, type, listener) => {
     target.addEventListener(type, listener);
-    listeners.push(() => target.removeEventListener(type, listener));
+    let active = true;
+    const remove = () => {
+      if (!active) return false;
+      active = false;
+      try { target.removeEventListener(type, listener); } catch { /* Listener cleanup stays isolated. */ }
+      listeners.delete(remove);
+      return true;
+    };
+    listeners.add(remove);
+    return remove;
+  };
+
+  const notify = (callback, value) => {
+    try {
+      Promise.resolve(typeof callback === 'function' ? callback(value) : undefined).catch(() => {});
+    } catch {
+      // Integration observers cannot change a confirmed editor outcome.
+    }
   };
 
   const announce = (message = '', type = '') => {
@@ -147,25 +165,41 @@ export function createAdminRecipeEditor({
     remove.className = 'admin-row-action';
     remove.textContent = 'Remove';
     remove.setAttribute('aria-label', 'Remove ingredient');
-    const row = { wrapper, name, measurement, remove };
-    listen(name, 'input', markDirty);
-    listen(measurement, 'input', markDirty);
-    listen(remove, 'click', () => {
+    const removeListeners = [
+      listen(name, 'input', markDirty),
+      listen(measurement, 'input', markDirty),
+    ];
+    removeListeners.push(listen(remove, 'click', () => {
       if (pending || ingredientRows.length <= 1) return;
       ingredientRows = ingredientRows.filter((candidate) => candidate !== row);
+      row.dispose();
       wrapper.remove();
       markDirty();
       ingredientRows.at(-1)?.name.focus?.();
-    });
+    }));
+    const row = {
+      wrapper,
+      name,
+      measurement,
+      remove,
+      dispose() {
+        for (const removeListener of removeListeners.splice(0)) removeListener();
+      },
+    };
     wrapper.append(nameLabel, measurementLabel, remove);
     elements.ingredients.append(wrapper);
     ingredientRows.push(row);
     return row;
   };
 
-  const replaceIngredients = (ingredients = [{ name: '', measurement: '' }]) => {
-    elements.ingredients.replaceChildren();
+  const clearIngredientRows = () => {
+    for (const row of ingredientRows) row.dispose();
     ingredientRows = [];
+    elements.ingredients.replaceChildren();
+  };
+
+  const replaceIngredients = (ingredients = [{ name: '', measurement: '' }]) => {
+    clearIngredientRows();
     for (const ingredient of ingredients.length ? ingredients : [{ name: '', measurement: '' }]) {
       createIngredientRow(ingredient);
     }
@@ -210,13 +244,30 @@ export function createAdminRecipeEditor({
     replaceIngredients(recipe?.ingredients);
   };
 
+  const clearFormData = () => {
+    for (const field of [
+      elements.name,
+      elements.description,
+      elements.categoryId,
+      elements.cuisineId,
+      elements.imageUrl,
+      elements.fallbackImageUrl,
+      elements.tutorialUrl,
+      elements.instructions,
+    ]) field.value = '';
+    elements.categoryId.replaceChildren();
+    elements.cuisineId.replaceChildren();
+    clearIngredientRows();
+    clearErrors();
+    announce();
+  };
+
   const hide = () => {
     mode = null;
     recipeId = null;
     expectedUpdatedAt = null;
     dirty = false;
-    clearErrors();
-    announce();
+    clearFormData();
     elements.panel.hidden = true;
   };
 
@@ -318,6 +369,8 @@ export function createAdminRecipeEditor({
         generation += 1;
         try { mutationService.invalidate?.(); } catch { /* Lost authorization fails closed. */ }
         try { taxonomySource.invalidate?.(); } catch { /* Lost authorization hides stale taxonomies. */ }
+        hide();
+        notify(onAuthorizationLost);
       }
       return false;
     }
@@ -325,7 +378,7 @@ export function createAdminRecipeEditor({
     expectedUpdatedAt = result.data.updatedAt;
     dirty = false;
     announce('Draft saved in the injected offline test environment.', 'success');
-    try { onSaved(result.data); } catch { /* UI observers stay isolated. */ }
+    notify(onSaved, result.data);
     return true;
   };
 
@@ -366,15 +419,20 @@ export function createAdminRecipeEditor({
     setAuthorization(authorized, userId = null) {
       if (retired) return false;
       const nextUserId = authorized && typeof userId === 'string' ? userId : null;
-      if (nextUserId === authorizedUserId) return true;
+      if (nextUserId === authorizedUserId) {
+        if (nextUserId === null && (mode || pending)) {
+          generation += 1;
+          setBusy(false);
+          hide();
+        }
+        return true;
+      }
       generation += 1;
       authorizedUserId = nextUserId;
       try { mutationService.invalidate?.(); } catch { /* Stale writes fail closed locally. */ }
       try { taxonomySource.invalidate?.(); } catch { /* Stale taxonomy results stay hidden. */ }
-      if (!authorizedUserId) {
-        setBusy(false);
-        hide();
-      }
+      setBusy(false);
+      hide();
       return true;
     },
     cleanup() {
@@ -384,7 +442,7 @@ export function createAdminRecipeEditor({
       authorizedUserId = null;
       setBusy(false);
       hide();
-      for (const remove of listeners.splice(0)) {
+      for (const remove of [...listeners]) {
         try { remove(); } catch { /* DOM cleanup stays isolated. */ }
       }
       try { windowLike?.removeEventListener?.('beforeunload', onBeforeUnload); } catch { /* Cleanup stays isolated. */ }
