@@ -55,6 +55,15 @@ assert.deepEqual(getSupabaseClientOptions(SUPABASE_CLIENT_PROFILE.APPLICATION_SE
     skipAutoInitialize: true,
   },
 });
+assert.deepEqual(getSupabaseClientOptions(SUPABASE_CLIENT_PROFILE.PASSWORD_RECOVERY), {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: false,
+    detectSessionInUrl: true,
+    flowType: 'pkce',
+    skipAutoInitialize: true,
+  },
+});
 assert.throws(() => getSupabaseClientOptions('unknown'), SupabaseConfigurationError);
 
 assert.deepEqual(validateSupabaseConfig(validConfig), validConfig);

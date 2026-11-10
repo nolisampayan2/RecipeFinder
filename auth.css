@@ -19,6 +19,7 @@
 html{min-width:320px;background:var(--auth-bg)}
 body{margin:0;min-height:100vh;min-height:100dvh;background:radial-gradient(circle at 84% 8%,rgba(117,70,224,.22),transparent 28%),var(--auth-bg);color:var(--auth-text);font-family:'DM Sans',system-ui,sans-serif;line-height:1.5}
 button,input{font:inherit}
+fieldset{min-width:0}
 a{color:inherit}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .skip-link{position:fixed;z-index:20;left:1rem;top:-5rem;background:#fff;color:#21133e;padding:.75rem 1rem;border-radius:10px;font-weight:700}.skip-link:focus{top:1rem}
@@ -41,6 +42,7 @@ a{color:inherit}
 .auth-card{width:min(480px,100%);padding:clamp(24px,3vw,38px);border:1px solid var(--auth-line);border-radius:28px;background:linear-gradient(145deg,rgba(35,29,53,.96),rgba(23,19,35,.98));box-shadow:var(--auth-shadow)}
 .auth-card-header{margin-bottom:22px}.auth-card-header h1{font:800 clamp(30px,4vw,42px)/1.08 'Manrope',sans-serif;letter-spacing:-.035em;margin:0 0 11px;overflow-wrap:anywhere}.auth-card-header p{margin:0;color:var(--auth-muted);font-size:14px}
 .auth-form{display:grid;gap:16px}.field{display:grid;gap:7px}.field-row{display:flex;justify-content:space-between;align-items:center;gap:12px}.field label,.field-row label{font-size:13px;font-weight:700}.field input{width:100%;height:48px;border:1px solid var(--auth-line);border-radius:14px;background:rgba(10,8,18,.42);color:var(--auth-text);padding:0 15px;outline:0}.field input::placeholder{color:#817a91}.field input:hover{border-color:rgba(190,164,255,.3)}.field input:focus{border-color:var(--auth-purple-2);box-shadow:0 0 0 4px rgba(129,87,245,.2)}.field input[aria-invalid='true']{border-color:var(--auth-error);box-shadow:0 0 0 3px rgba(255,122,143,.12)}
+.recovery-fields{display:grid;gap:16px;margin:0;padding:0;border:0}.recovery-fields:disabled{opacity:.68}.recovery-fields:disabled .auth-submit{cursor:not-allowed;box-shadow:none}
 .password-wrap{position:relative}.password-wrap input{padding-right:74px}.password-toggle{position:absolute;right:8px;top:7px;height:36px;border:0;border-radius:10px;background:transparent;color:#cbb8ff;padding:0 10px;font-size:12px;font-weight:700}.password-toggle:hover{background:rgba(129,87,245,.15)}
 .field-help{margin:0;color:#938da2;font-size:11px}.field-error{min-height:15px;margin:0;color:var(--auth-error);font-size:12px;line-height:1.25}
 .form-options{display:flex;align-items:center;justify-content:space-between;gap:16px;font-size:12px}.check{display:flex;align-items:center;gap:8px;color:var(--auth-muted)}.check input{width:16px;height:16px;margin:0;accent-color:var(--auth-purple)}.text-link{color:#cbb8ff;text-decoration:none;font-weight:700}.text-link:hover{text-decoration:underline;text-underline-offset:3px}

@@ -6,6 +6,7 @@ export const SUPABASE_CLIENT_PROFILE = Object.freeze({
   FOUNDATION: 'foundation',
   PKCE_PREPARATION: 'pkce-preparation',
   APPLICATION_SESSION: 'application-session',
+  PASSWORD_RECOVERY: 'password-recovery',
 });
 
 export const PKCE_STORAGE_REQUIREMENT =
@@ -105,6 +106,11 @@ export function getSupabaseClientOptions(profile = SUPABASE_CLIENT_PROFILE.FOUND
     auth.flowType = 'pkce';
     auth.persistSession = true;
     auth.autoRefreshToken = true;
+    auth.skipAutoInitialize = true;
+  } else if (profile === SUPABASE_CLIENT_PROFILE.PASSWORD_RECOVERY) {
+    auth.flowType = 'pkce';
+    auth.persistSession = true;
+    auth.detectSessionInUrl = true;
     auth.skipAutoInitialize = true;
   } else if (profile !== SUPABASE_CLIENT_PROFILE.FOUNDATION) {
     throw new SupabaseConfigurationError('Unknown Supabase client profile.');

@@ -23,6 +23,14 @@ const CLEANUP_ERROR_PATTERN = new RegExp(
 );
 let fixtureCounter = 0;
 
+assert.equal(PRODUCTION_OUTPUT_FILES.length, 51);
+for (const recoveryFile of [
+  'forgot-password.html',
+  'reset-password.html',
+  'js/password-recovery-browser.js',
+  'js/password-recovery.js',
+]) assert.equal(PRODUCTION_OUTPUT_FILES.includes(recoveryFile), true);
+
 async function exists(path) {
   try {
     await realFilesystem.lstat(path);
@@ -73,7 +81,15 @@ async function verifySuccessfulOutput(fixture) {
   assert.equal(result.outputDirectory, resolve(fixture.root, 'dist'));
   assert.deepEqual(result.files, PRODUCTION_OUTPUT_FILES);
 
-  for (const page of ['index.html', 'login.html', 'register.html', 'verify-email.html', 'auth-callback.html']) {
+  for (const page of [
+    'index.html',
+    'login.html',
+    'register.html',
+    'forgot-password.html',
+    'reset-password.html',
+    'verify-email.html',
+    'auth-callback.html',
+  ]) {
     const html = await realFilesystem.readFile(resolve(result.outputDirectory, page), 'utf8');
     const references = [...html.matchAll(/(?:href|src)=["']([^"']+)["']/gi)]
       .map((match) => localReference(match[1]))
@@ -98,7 +114,9 @@ async function verifySuccessfulOutput(fixture) {
   assert.equal(await exists(resolve(fixture.root, '.dist-build-lock')), false);
   for (const excluded of [
     'admin.html', 'admin.css', 'js/admin-browser.js', 'js/admin-cms.js',
+    'js/admin-recipe-editor.js', 'js/admin-recipe-validation.js',
     'js/supabase-admin-access.js', 'js/supabase-admin-recipes.js',
+    'js/supabase-admin-recipe-mutations.js', 'js/supabase-admin-taxonomies.js',
     'tests', 'supabase', 'scripts', '.git', 'js/supabase-config.example.js',
   ]) assert.equal(await exists(resolve(result.outputDirectory, excluded)), false);
 }
@@ -431,7 +449,7 @@ for (const environment of [
       ERROR_PATTERN,
     );
     releaseFirstCopy();
-    assert.equal((await firstBuild).files.length, 47);
+    assert.equal((await firstBuild).files.length, PRODUCTION_OUTPUT_FILES.length);
   } finally {
     releaseFirstCopy?.();
     await removeFixture(fixture);
