@@ -31,9 +31,9 @@ const CLEANUP_ERROR_PATTERN = new RegExp(
 );
 let fixtureCounter = 0;
 
-assert.equal(PRODUCTION_OUTPUT_FILES.length, 47);
+assert.equal(PRODUCTION_OUTPUT_FILES.length, 51);
 assert.equal(ADMIN_PREVIEW_FILES.length, 8);
-assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 55);
+assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 59);
 assert.equal(ADMIN_PREVIEW_FILES.includes('js/admin-recipe-editor.js'), true);
 assert.equal(ADMIN_PREVIEW_FILES.includes('js/admin-recipe-validation.js'), true);
 for (const inactiveService of [
@@ -106,7 +106,15 @@ async function verifySuccessfulOutput(
   assert.equal(result.outputDirectory, resolve(fixture.root, 'dist'));
   assert.deepEqual(result.files, expectedFiles);
 
-  const pages = ['index.html', 'login.html', 'register.html', 'verify-email.html', 'auth-callback.html'];
+  const pages = [
+    'index.html',
+    'login.html',
+    'register.html',
+    'forgot-password.html',
+    'reset-password.html',
+    'verify-email.html',
+    'auth-callback.html',
+  ];
   if (adminExpected) pages.push('admin.html');
   for (const page of pages) {
     const html = await realFilesystem.readFile(resolve(result.outputDirectory, page), 'utf8');
@@ -558,7 +566,7 @@ for (const environment of [
       ERROR_PATTERN,
     );
     releaseFirstCopy();
-    assert.equal((await firstBuild).files.length, 47);
+    assert.equal((await firstBuild).files.length, PRODUCTION_OUTPUT_FILES.length);
   } finally {
     releaseFirstCopy?.();
     await removeFixture(fixture);

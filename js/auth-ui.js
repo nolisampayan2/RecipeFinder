@@ -584,20 +584,8 @@ function initializeConfirmationResendForm() {
   form.addEventListener('submit', createConfirmationResendFormSubmitHandler(form));
 }
 
-function initializeForgotPasswordPreview() {
-  const link = document.querySelector('[data-forgot-password]');
-  const form = document.querySelector('[data-auth-form]');
-  if (!link || !(form instanceof HTMLFormElement)) return;
-
-  link.addEventListener('click', (event) => {
-    event.preventDefault();
-    updateStatus(form, 'Password recovery is a future screen. No recovery request was sent.');
-  });
-}
-
 if (typeof document !== 'undefined') {
   initializePasswordToggles();
   initializeForm();
   initializeConfirmationResendForm();
-  initializeForgotPasswordPreview();
 }
