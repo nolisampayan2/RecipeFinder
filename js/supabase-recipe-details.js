@@ -1,6 +1,8 @@
 import { normalizePublishedRecipeRow } from './supabase-recipe-source.js';
 import { isValidAccountUserId, isValidFavoriteRecipeId } from './supabase-favorites.js';
 
+const FICTIONAL_RECIPE_ID = /^external:fictional-offline:(\d+)$/;
+
 export const AUTHENTICATED_RECIPE_DETAIL_SELECT = Object.freeze([
   'id',
   'name',
@@ -78,8 +80,24 @@ function authenticatedUserId(authContext) {
   }
 }
 
-function isRecipeFinderId(recipeId) {
-  return isValidFavoriteRecipeId(recipeId) && !recipeId.startsWith('external:');
+function recipeFinderIdentity(recipeId) {
+  if (!isValidFavoriteRecipeId(recipeId)) return null;
+  if (!recipeId.startsWith('external:')) {
+    return Object.freeze({ id: recipeId, fictionalExternalId: null });
+  }
+  const fictionalMatch = FICTIONAL_RECIPE_ID.exec(recipeId);
+  return fictionalMatch
+    ? Object.freeze({ id: recipeId, fictionalExternalId: fictionalMatch[1] })
+    : null;
+}
+
+function matchesRequestedIdentity(recipe, identity) {
+  if (recipe.id !== identity.id) return false;
+  if (identity.fictionalExternalId === null) return true;
+  return recipe.source === 'database'
+    && recipe.databaseSourceType === 'external'
+    && recipe.externalProvider === 'fictional-offline'
+    && recipe.externalId === identity.fictionalExternalId;
 }
 
 function explicitRows(response) {
@@ -110,9 +128,10 @@ export function createAuthenticatedRecipeDetailService(client) {
 
     const userId = authenticatedUserId(authContext);
     if (!userId) return Promise.resolve(UNAUTHORIZED_RESULT);
-    if (!isRecipeFinderId(recipeId)) return Promise.resolve(INVALID_INPUT_RESULT);
+    const identity = recipeFinderIdentity(recipeId);
+    if (!identity) return Promise.resolve(INVALID_INPUT_RESULT);
 
-    const requestKey = `${userId}\u0000${recipeId}`;
+    const requestKey = `${userId}\u0000${identity.id}`;
     if (pending?.key === requestKey) return pending.promise;
 
     const requestGeneration = ++generation;
@@ -122,11 +141,20 @@ export function createAuthenticatedRecipeDetailService(client) {
         if (!isRecord(table) || typeof table.select !== 'function') return UNAVAILABLE_RESULT;
         const selected = table.select(AUTHENTICATED_RECIPE_DETAIL_SELECT);
         if (!selected || typeof selected.eq !== 'function') return UNAVAILABLE_RESULT;
-        const identified = selected.eq('id', recipeId);
+        const identified = selected.eq('id', identity.id);
         if (!identified || typeof identified.eq !== 'function') return UNAVAILABLE_RESULT;
         const published = identified.eq('status', 'published');
-        if (!published || typeof published.limit !== 'function') return UNAVAILABLE_RESULT;
-        const response = await published.limit(2);
+        if (!published || typeof published.eq !== 'function') return UNAVAILABLE_RESULT;
+        let bounded = published;
+        if (identity.fictionalExternalId !== null) {
+          const externalSource = bounded.eq('source_type', 'external');
+          if (!externalSource || typeof externalSource.eq !== 'function') return UNAVAILABLE_RESULT;
+          const fictionalProvider = externalSource.eq('external_provider', 'fictional-offline');
+          if (!fictionalProvider || typeof fictionalProvider.eq !== 'function') return UNAVAILABLE_RESULT;
+          bounded = fictionalProvider.eq('external_id', identity.fictionalExternalId);
+        }
+        if (!bounded || typeof bounded.limit !== 'function') return UNAVAILABLE_RESULT;
+        const response = await bounded.limit(2);
 
         if (retired || requestGeneration !== generation) return STALE_RESULT;
         const rows = explicitRows(response);
@@ -137,7 +165,7 @@ export function createAuthenticatedRecipeDetailService(client) {
         }
 
         const recipe = normalizePublishedRecipeRow(rows[0]);
-        if (recipe.id !== recipeId) return UNAVAILABLE_RESULT;
+        if (!matchesRequestedIdentity(recipe, identity)) return UNAVAILABLE_RESULT;
         return Object.freeze({ data: recipe, error: null, stale: false });
       } catch {
         return retired || requestGeneration !== generation ? STALE_RESULT : UNAVAILABLE_RESULT;

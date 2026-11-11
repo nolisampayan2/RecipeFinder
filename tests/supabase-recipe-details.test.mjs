@@ -18,6 +18,8 @@ const AUTH_B = Object.freeze({
   status: 'authenticated',
   userId: '22222222-2222-4222-8222-222222222222',
 });
+const FICTIONAL_ID = 'external:fictional-offline:990001';
+const FICTIONAL_ZERO_ID = 'external:fictional-offline:000123';
 
 function validRow(overrides = {}) {
   return {
@@ -40,6 +42,16 @@ function validRow(overrides = {}) {
     cuisine: { name: 'Italian' },
     ...overrides,
   };
+}
+
+function fictionalRow(overrides = {}) {
+  return validRow({
+    id: FICTIONAL_ID,
+    source_type: 'external',
+    external_provider: 'fictional-offline',
+    external_id: '990001',
+    ...overrides,
+  });
 }
 
 function deferred() {
@@ -113,6 +125,40 @@ assert.ok(Object.isFrozen(validResult.data));
 assert.ok(Object.isFrozen(validResult.data.ingredients));
 assert.ok(Object.isFrozen(validResult.data.ingredients[0]));
 
+const fictionalHarness = fakeClient({ data: [fictionalRow()], error: null });
+const fictionalResult = await createAuthenticatedRecipeDetailService(fictionalHarness.client)
+  .getPublishedById(FICTIONAL_ID, AUTH_A);
+assert.equal(fictionalResult.error, null);
+assert.equal(fictionalResult.data.id, FICTIONAL_ID);
+assert.equal(fictionalResult.data.source, 'database');
+assert.equal(fictionalResult.data.databaseSourceType, 'external');
+assert.equal(fictionalResult.data.externalProvider, 'fictional-offline');
+assert.equal(fictionalResult.data.externalId, '990001');
+assert.deepEqual(fictionalHarness.calls, [
+  ['from', 'recipes'],
+  ['select', AUTHENTICATED_RECIPE_DETAIL_SELECT],
+  ['eq', 'id', FICTIONAL_ID],
+  ['eq', 'status', 'published'],
+  ['eq', 'source_type', 'external'],
+  ['eq', 'external_provider', 'fictional-offline'],
+  ['eq', 'external_id', '990001'],
+  ['limit', 2],
+]);
+
+const leadingZeroHarness = fakeClient({ data: [fictionalRow({
+  id: FICTIONAL_ZERO_ID,
+  external_id: '000123',
+})], error: null });
+const leadingZeroResult = await createAuthenticatedRecipeDetailService(leadingZeroHarness.client)
+  .getPublishedById(FICTIONAL_ZERO_ID, AUTH_A);
+assert.equal(leadingZeroResult.data?.id, FICTIONAL_ZERO_ID);
+assert.equal(leadingZeroResult.data?.externalId, '000123');
+assert.equal(
+  leadingZeroHarness.calls.some((call) => call[0] === 'eq' && call[1] === 'external_id' && call[2] === '000123'),
+  true,
+  'The fictional suffix must remain an exact string'
+);
+
 for (const authContext of [
   undefined,
   null,
@@ -185,8 +231,12 @@ for (const recipeId of [
   'UPPERCASE',
   '../recipe',
   'external:themealdb:52772',
-  'external:fictional-offline:990001',
   'external:curated:42',
+  'external:fictional-offline:',
+  'external:fictional-offline:not-digits',
+  'external:fictional-offline:123/456',
+  'External:fictional-offline:123',
+  `external:fictional-offline:${'1'.repeat(180)}`,
 ]) {
   const harness = fakeClient({ data: [validRow()], error: null });
   const result = await createAuthenticatedRecipeDetailService(harness.client)
@@ -211,6 +261,30 @@ const curatedResult = await createAuthenticatedRecipeDetailService(fakeClient({
 }).client).getPublishedById('curated:42', AUTH_A);
 assert.equal(curatedResult.data?.source, 'database');
 assert.equal(curatedResult.data?.externalProvider, 'curated-provider');
+
+for (const mismatchedRow of [
+  fictionalRow({ external_provider: 'themealdb' }),
+  fictionalRow({ external_id: '990002' }),
+  fictionalRow({ source_type: 'seed', external_provider: null, external_id: null }),
+  fictionalRow({ id: 'external:fictional-offline:990002', external_id: '990002' }),
+  fictionalRow({ status: 'draft' }),
+]) {
+  const mismatchHarness = fakeClient({ data: [mismatchedRow], error: null });
+  const mismatchResult = await createAuthenticatedRecipeDetailService(mismatchHarness.client)
+    .getPublishedById(FICTIONAL_ID, AUTH_A);
+  assert.deepEqual(mismatchResult, {
+    data: null,
+    error: { code: 'UNAVAILABLE', message: 'Recipe details are unavailable.' },
+    stale: false,
+  });
+}
+
+assert.equal((await createAuthenticatedRecipeDetailService(fakeClient({
+  data: [], error: null,
+}).client).getPublishedById(FICTIONAL_ID, AUTH_A)).error.code, 'NOT_FOUND');
+assert.equal((await createAuthenticatedRecipeDetailService(fakeClient({
+  data: [fictionalRow(), fictionalRow()], error: null,
+}).client).getPublishedById(FICTIONAL_ID, AUTH_A)).error.code, 'UNAVAILABLE');
 
 const expectedUnavailable = {
   data: null,
@@ -331,6 +405,55 @@ assert.equal((await sameRecipeARequest).error.code, 'STALE');
 sameRecipeBDeferred.resolve({ data: [validRow()], error: null });
 assert.equal((await sameRecipeBRequest).data?.id, 'creamy-garlic-pasta');
 
+const fictionalAccountADeferred = deferred();
+const fictionalAccountBDeferred = deferred();
+const fictionalAccountHarness = fakeClient((request) => (
+  request === 1 ? fictionalAccountADeferred.promise : fictionalAccountBDeferred.promise
+));
+const fictionalAccountService = createAuthenticatedRecipeDetailService(fictionalAccountHarness.client);
+const fictionalAccountARequest = fictionalAccountService.getPublishedById(FICTIONAL_ID, AUTH_A);
+const fictionalAccountBRequest = fictionalAccountService.getPublishedById(FICTIONAL_ID, AUTH_B);
+assert.notEqual(fictionalAccountARequest, fictionalAccountBRequest);
+assert.equal(fictionalAccountHarness.requests, 2);
+fictionalAccountADeferred.resolve({ data: [fictionalRow()], error: null });
+assert.equal((await fictionalAccountARequest).error.code, 'STALE');
+fictionalAccountBDeferred.resolve({ data: [fictionalRow()], error: null });
+assert.equal((await fictionalAccountBRequest).data?.id, FICTIONAL_ID);
+
+const fictionalLogoutDeferred = deferred();
+const fictionalLogoutService = createAuthenticatedRecipeDetailService(
+  fakeClient(() => fictionalLogoutDeferred.promise).client
+);
+const fictionalLogoutRequest = fictionalLogoutService.getPublishedById(FICTIONAL_ID, AUTH_A);
+assert.equal(fictionalLogoutService.invalidate(), true);
+fictionalLogoutDeferred.resolve({ data: [fictionalRow()], error: null });
+assert.equal((await fictionalLogoutRequest).error.code, 'STALE');
+
+const fictionalSwitchADeferred = deferred();
+const fictionalSwitchBDeferred = deferred();
+const fictionalSwitchHarness = fakeClient((request) => (
+  request === 1 ? fictionalSwitchADeferred.promise : fictionalSwitchBDeferred.promise
+));
+const fictionalSwitchService = createAuthenticatedRecipeDetailService(fictionalSwitchHarness.client);
+const fictionalSwitchARequest = fictionalSwitchService.getPublishedById(FICTIONAL_ID, AUTH_A);
+fictionalSwitchService.invalidate();
+const fictionalSwitchBRequest = fictionalSwitchService.getPublishedById(FICTIONAL_ID, AUTH_B);
+fictionalSwitchBDeferred.resolve({ data: [fictionalRow()], error: null });
+assert.equal((await fictionalSwitchBRequest).data?.id, FICTIONAL_ID);
+fictionalSwitchADeferred.resolve({ data: [fictionalRow()], error: null });
+assert.equal((await fictionalSwitchARequest).error.code, 'STALE');
+
+const fictionalLateRejectionDeferred = deferred();
+const fictionalLateRejectionService = createAuthenticatedRecipeDetailService(
+  fakeClient(() => fictionalLateRejectionDeferred.promise).client
+);
+const fictionalLateRejectionRequest = fictionalLateRejectionService.getPublishedById(FICTIONAL_ID, AUTH_A);
+fictionalLateRejectionService.invalidate();
+fictionalLateRejectionDeferred.reject(new Error('PRIVATE_FICTIONAL_LATE_REJECTION'));
+const fictionalLateRejectionResult = await fictionalLateRejectionRequest;
+assert.equal(fictionalLateRejectionResult.error.code, 'STALE');
+assert.doesNotMatch(JSON.stringify(fictionalLateRejectionResult), /PRIVATE_FICTIONAL_LATE_REJECTION/);
+
 const lateRejectionDeferred = deferred();
 const lateRejectionHarness = fakeClient(() => lateRejectionDeferred.promise);
 const lateRejectionService = createAuthenticatedRecipeDetailService(lateRejectionHarness.client);
@@ -367,6 +490,17 @@ const requestsBeforeRetiredCall = cleanupHarness.requests;
 assert.equal((await cleanupService.getPublishedById('creamy-garlic-pasta', AUTH_A)).error.code, 'STALE');
 assert.equal(cleanupHarness.requests, requestsBeforeRetiredCall);
 assert.equal(cleanupService.invalidate(), false);
+
+const fictionalCleanupDeferred = deferred();
+const fictionalCleanupHarness = fakeClient(() => fictionalCleanupDeferred.promise);
+const fictionalCleanupService = createAuthenticatedRecipeDetailService(fictionalCleanupHarness.client);
+const fictionalCleanupRequest = fictionalCleanupService.getPublishedById(FICTIONAL_ID, AUTH_A);
+assert.equal(fictionalCleanupService.cleanup(), true);
+fictionalCleanupDeferred.resolve({ data: [fictionalRow()], error: null });
+assert.equal((await fictionalCleanupRequest).error.code, 'STALE');
+const fictionalRequestsBeforeRetiredCall = fictionalCleanupHarness.requests;
+assert.equal((await fictionalCleanupService.getPublishedById(FICTIONAL_ID, AUTH_A)).error.code, 'STALE');
+assert.equal(fictionalCleanupHarness.requests, fictionalRequestsBeforeRetiredCall);
 
 const serviceSource = await readFile(resolve('js/supabase-recipe-details.js'), 'utf8');
 assert.doesNotMatch(serviceSource, /createClient|localStorage|sessionStorage|indexedDB|document\.|window\.|fetch\s*\(|XMLHttpRequest|WebSocket/i);
