@@ -23,7 +23,10 @@ const builtIn = Object.freeze({
   id: 'creamy-garlic-pasta', source: 'built-in', detailLevel: 'preview', name: 'Creamy Garlic Pasta',
 });
 const database = Object.freeze({
-  id: 'cms-adobo', source: 'database', detailLevel: 'preview', name: 'CMS Adobo',
+  id: 'cms:11111111-2222-4333-8444-555555555555', source: 'database', detailLevel: 'preview', name: 'CMS Adobo',
+});
+const seedDatabase = Object.freeze({
+  id: 'seed-adobo', source: 'database', detailLevel: 'preview', name: 'Seed Adobo',
 });
 const fictional = Object.freeze({
   id: 'external:fictional-offline:990001', externalId: '990001', source: 'external',
@@ -34,7 +37,7 @@ const mealDb = Object.freeze({
   externalProvider: 'themealdb', detailLevel: 'full', name: 'Teriyaki Chicken Casserole',
 });
 
-for (const recipe of [builtIn, database, fictional]) {
+for (const recipe of [builtIn, database, seedDatabase, fictional]) {
   assert.equal(classifyRecipeDetailAccess(recipe, guest), RECIPE_DETAIL_ACCESS.REQUIRES_LOGIN);
   assert.equal(
     classifyRecipeDetailAccess(recipe, authenticated),
@@ -62,6 +65,30 @@ for (const malformed of [
 for (const state of [{ status: 'loading' }, { status: 'pending-confirmation' }]) {
   assert.equal(classifyRecipeDetailAccess(database, state), RECIPE_DETAIL_ACCESS.PENDING_AUTH);
 }
+const internalColonDatabase = Object.freeze({ ...database, id: 'cms:regional:adobo' });
+assert.equal(
+  classifyRecipeDetailAccess(internalColonDatabase, guest),
+  RECIPE_DETAIL_ACCESS.REQUIRES_LOGIN
+);
+assert.equal(
+  classifyRecipeDetailAccess({ ...database, id: `a${'b'.repeat(199)}` }, guest),
+  RECIPE_DETAIL_ACCESS.REQUIRES_LOGIN
+);
+for (const invalidDatabaseId of [
+  `a${'b'.repeat(200)}`,
+  'CMS:11111111-2222-4333-8444-555555555555',
+  ' cms:11111111-2222-4333-8444-555555555555',
+  'cms:11111111-2222-4333-8444-555555555555 ',
+  'cms:\u0000private',
+  'external:themealdb:52772',
+  'external:fictional-offline:990001',
+  'external:unknown:1',
+]) {
+  assert.equal(
+    classifyRecipeDetailAccess({ ...database, id: invalidDatabaseId }, authenticated),
+    RECIPE_DETAIL_ACCESS.DENIED
+  );
+}
 for (const state of [
   { status: 'error' }, {}, null, { status: 'authenticated', userId: 'invalid' },
 ]) {
@@ -75,10 +102,24 @@ assert.equal(classifyRecipeDetailAccess(database, {
 }), RECIPE_DETAIL_ACCESS.AUTHENTICATED_RECIPEFINDER_DETAIL);
 assert.equal(statusReads, 1);
 assert.equal(userIdReads, 1);
+let changingUserIdReads = 0;
+assert.equal(classifyRecipeDetailAccess(database, {
+  status: 'authenticated',
+  get userId() {
+    changingUserIdReads += 1;
+    return changingUserIdReads === 1 ? USER_ID : 'invalid';
+  },
+}), RECIPE_DETAIL_ACCESS.AUTHENTICATED_RECIPEFINDER_DETAIL);
+assert.equal(changingUserIdReads, 1);
 assert.equal(classifyRecipeDetailAccess(database, {
   status: 'authenticated',
   get userId() { throw new Error('private getter message'); },
 }), RECIPE_DETAIL_ACCESS.DENIED);
+assert.doesNotThrow(() => {
+  assert.equal(classifyRecipeDetailAccess(database, {
+    get status() { throw new Error('private status getter message'); },
+  }), RECIPE_DETAIL_ACCESS.DENIED);
+});
 
 class FakeElement {
   constructor(tagName) {

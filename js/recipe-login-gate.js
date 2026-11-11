@@ -9,6 +9,7 @@ export const RECIPE_DETAIL_ACCESS = Object.freeze({
 });
 
 const LOCAL_RECIPE_ID = /^[a-z0-9][a-z0-9_-]{0,199}$/;
+const DATABASE_RECIPE_ID = /^[a-z0-9][a-z0-9:_-]{0,199}$/;
 const THEMEALDB_ID = /^external:themealdb:(\d+)$/;
 const FICTIONAL_ID = /^external:fictional-offline:(\d+)$/;
 
@@ -51,7 +52,8 @@ function isRecipeFinderPreview(recipe) {
 
   if (recipe.source === 'database') {
     return typeof recipe.id === 'string'
-      && LOCAL_RECIPE_ID.test(recipe.id)
+      && DATABASE_RECIPE_ID.test(recipe.id)
+      && !recipe.id.startsWith('external:')
       && recipe.detailLevel === 'preview'
       && (recipe.externalProvider === undefined || recipe.externalProvider === null)
       && (recipe.externalId === undefined || recipe.externalId === null);
