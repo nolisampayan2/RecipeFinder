@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFile, readdir } from 'node:fs/promises';
-import { extname, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -292,23 +292,207 @@ for (const forbidden of [
   assert.doesNotMatch(moduleSource, forbidden);
 }
 
-async function applicationSources(directory) {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const sources = [];
-  for (const entry of entries) {
-    const path = resolve(directory, entry.name);
-    if (entry.isDirectory()) sources.push(...await applicationSources(path));
-    else if (['.js', '.html'].includes(extname(entry.name))) sources.push(path);
-  }
-  return sources;
+function repositoryPath(path) {
+  return relative(root, path).replaceAll('\\', '/');
 }
 
-const activeSources = [resolve(root, 'app.js'), resolve(root, 'index.html'), ...await applicationSources(resolve(root, 'js'))]
-  .filter((path) => path !== resolve(root, modulePath));
-for (const sourcePath of activeSources) {
-  const source = await readFile(sourcePath, 'utf8');
-  assert.equal(source.includes('recipe-login-gate.js'), false, `${sourcePath} must not activate the gate`);
+function localModuleSpecifiers(source) {
+  // This bounded scanner is intentionally not a general JavaScript parser.
+  // Active code must use ordinary static imports or literal import() calls;
+  // detectable runtime loaders and nonliteral dynamic imports fail closed.
+  assert.doesNotMatch(
+    source,
+    /\b(?:import|export|from)\s*\/(?:\*|\/)/u,
+    'Comments interleaved with module syntax are unsupported'
+  );
+  assert.doesNotMatch(
+    source,
+    /(?:\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))\s*from\b/u,
+    'Comments immediately before from are unsupported'
+  );
+  const specifiers = [];
+  const patterns = [
+    /(?:^|[;\r\n])\s*import\s+(?:[^'";]*?\s+from\s+)?['"]([^'"]+)['"]/g,
+    /(?:^|[;\r\n])\s*export\s+[^'";]*?\s+from\s+['"]([^'"]+)['"]/g,
+    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      const specifier = match[1];
+      assert.equal(
+        specifier.startsWith('.') || specifier.startsWith('/') || /^[a-z][a-z\d+.-]*:/iu.test(specifier),
+        true,
+        `Unsupported bare module specifier: ${specifier}`
+      );
+      if (specifier.startsWith('.') || specifier.startsWith('/')) specifiers.push(specifier);
+    }
+  }
+  const literalDynamicImports = [...source.matchAll(/\bimport\s*\(\s*['"][^'"]+['"]\s*\)/g)].length;
+  const allDynamicImports = [...source.matchAll(/\bimport\s*\(/g)].length;
+  assert.equal(allDynamicImports, literalDynamicImports, 'Active modules must use literal dynamic imports');
+  assert.doesNotMatch(source, /\b(?:importScripts|Worker|SharedWorker)\s*\(/u);
+  assert.doesNotMatch(source, /createElement\s*\(\s*['"]script['"]\s*\)/u);
+  return Object.freeze(specifiers);
 }
+
+function deployedScriptSources(html, htmlPath) {
+  const sources = [];
+  for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/giu)) {
+    const attributes = match[1];
+    const body = match[2].trim();
+    const sourceAttributes = [...attributes.matchAll(/(?:^|\s)src\s*=/giu)];
+    const hasSourceAttribute = sourceAttributes.length > 0;
+    assert.ok(sourceAttributes.length <= 1, `${htmlPath} must not contain duplicate script src attributes`);
+    const quotedSource = /(?:^|\s)src\s*=\s*(['"])(.*?)\1/iu.exec(attributes);
+    assert.equal(
+      hasSourceAttribute && !quotedSource,
+      false,
+      `${htmlPath} must use a quoted script src attribute`
+    );
+    const isModule = /(?:^|\s)type\s*=\s*(?:['"]module['"]|module(?:\s|$))/iu.test(attributes);
+    assert.equal(
+      isModule && !quotedSource && body.length > 0,
+      false,
+      `${htmlPath} must not use inline module code`
+    );
+    if (quotedSource) sources.push(quotedSource[2]);
+  }
+  return Object.freeze(sources);
+}
+
+function resolveLocalModule(importer, specifier) {
+  const withoutSuffix = specifier.split(/[?#]/u, 1)[0];
+  const resolved = specifier.startsWith('/')
+    ? resolve(root, `.${withoutSuffix}`)
+    : resolve(dirname(importer), withoutSuffix);
+  const relativePath = relative(root, resolved);
+  assert.equal(
+    isAbsolute(relativePath) || relativePath === '..' || relativePath.startsWith(`..\\`) || relativePath.startsWith('../'),
+    false,
+    `Active module import escapes the repository: ${specifier}`
+  );
+  return resolved;
+}
+
+async function deployedScriptEntries(deploymentFiles) {
+  const htmlFiles = [...deploymentFiles].filter((path) => path.endsWith('.html')).sort();
+  const entries = new Set();
+  for (const htmlPath of htmlFiles) {
+    const html = await readFile(resolve(root, htmlPath), 'utf8');
+    for (const source of deployedScriptSources(html, htmlPath)) {
+      if (/^[a-z][a-z\d+.-]*:/iu.test(source) || source.startsWith('//')) continue;
+      const entry = resolveLocalModule(resolve(root, htmlPath), source);
+      const entryPath = repositoryPath(entry);
+      assert.equal(deploymentFiles.has(entryPath), true, `${entryPath} must be in a deployment inventory`);
+      entries.add(entry);
+    }
+  }
+  return Object.freeze([...entries]);
+}
+
+async function reachableActiveModules(deploymentFileList) {
+  const deploymentFiles = new Set(deploymentFileList);
+  const queue = [...await deployedScriptEntries(deploymentFiles)];
+  const visited = new Set();
+  while (queue.length) {
+    const module = queue.shift();
+    if (visited.has(module)) continue;
+    visited.add(module);
+    const modulePathFromRoot = repositoryPath(module);
+    if (modulePathFromRoot === 'js/supabase-config.js') continue;
+    const source = await readFile(module, 'utf8');
+    for (const specifier of localModuleSpecifiers(source)) {
+      const dependency = resolveLocalModule(module, specifier);
+      const dependencyPath = repositoryPath(dependency);
+      assert.equal(deploymentFiles.has(dependencyPath), true, `${dependencyPath} must be in a deployment inventory`);
+      if (!visited.has(dependency)) queue.push(dependency);
+    }
+  }
+  return visited;
+}
+
+const productionActiveModules = await reachableActiveModules(PRODUCTION_OUTPUT_FILES);
+const previewActiveModules = await reachableActiveModules(ADMIN_PREVIEW_OUTPUT_FILES);
+
+assert.deepEqual(localModuleSpecifiers("import './ordinary.js';"), ['./ordinary.js']);
+assert.deepEqual(localModuleSpecifiers("import {\n  value\n} from './multiline.js';"), ['./multiline.js']);
+assert.deepEqual(localModuleSpecifiers("export { value } from './reexport.js';"), ['./reexport.js']);
+assert.deepEqual(localModuleSpecifiers("import('./dynamic.js?version=1')"), ['./dynamic.js?version=1']);
+assert.throws(
+  () => localModuleSpecifiers("import/*comment*/ './recipe-login-gate.js';"),
+  /Comments interleaved with module syntax/
+);
+assert.throws(
+  () => localModuleSpecifiers("import { value } from/*comment*/ './recipe-login-gate.js';"),
+  /Comments interleaved with module syntax/
+);
+assert.throws(
+  () => localModuleSpecifiers("import { value }/*comment*/from './recipe-login-gate.js';"),
+  /Comments immediately before from/
+);
+assert.throws(
+  () => localModuleSpecifiers("export { value }/*comment*/from './recipe-login-gate.js';"),
+  /Comments immediately before from/
+);
+assert.throws(
+  () => localModuleSpecifiers("import { value }/* comment; still comment */from './recipe-login-gate.js';"),
+  /Comments immediately before from/
+);
+assert.throws(
+  () => localModuleSpecifiers("export { value }// comment\nfrom './recipe-login-gate.js';"),
+  /Comments immediately before from/
+);
+assert.throws(() => localModuleSpecifiers('import(modulePath)'), /literal dynamic imports/);
+assert.throws(
+  () => resolveLocalModule(resolve(root, 'app.js'), '../../outside.js'),
+  /escapes the repository/
+);
+await assert.rejects(
+  readFile(resolveLocalModule(resolve(root, 'app.js'), './js/definitely-missing-module.js'), 'utf8'),
+  /ENOENT/
+);
+assert.deepEqual(
+  deployedScriptSources('<script type="module" src="js/example.js"></script>', 'synthetic.html'),
+  ['js/example.js']
+);
+assert.throws(
+  () => deployedScriptSources('<script src=js/example.js></script>', 'synthetic.html'),
+  /quoted script src/
+);
+assert.throws(
+  () => deployedScriptSources('<script type=module src=js/example.js></script>', 'synthetic.html'),
+  /quoted script src/
+);
+assert.throws(
+  () => deployedScriptSources('<script type=module>import "./example.js";</script>', 'synthetic.html'),
+  /inline module code/
+);
+for (const inactivePath of [
+  'js/recipe-login-gate.js',
+  'js/recipe-detail-access-controller.js',
+  'js/recipe-previews.js',
+  'js/supabase-recipe-details.js',
+  'js/supabase-recipe-previews.js',
+]) {
+  assert.equal(productionActiveModules.has(resolve(root, inactivePath)), false, `${inactivePath} must remain inactive in Production`);
+  assert.equal(previewActiveModules.has(resolve(root, inactivePath)), false, `${inactivePath} must remain inactive in Admin Preview`);
+}
+
+const appSource = await readFile(resolve(root, 'app.js'), 'utf8');
+assert.equal(localModuleSpecifiers(appSource).includes('./js/auth-session.js'), false);
+assert.equal(productionActiveModules.has(resolve(root, 'js/auth-session.js')), true, 'Production transitive imports must be traversed');
+assert.equal(previewActiveModules.has(resolve(root, 'js/auth-session.js')), true, 'Preview transitive imports must be traversed');
+assert.equal(PRODUCTION_OUTPUT_FILES.includes('js/admin-browser.js'), false);
+assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.includes('js/admin-browser.js'), true);
+assert.equal(productionActiveModules.has(resolve(root, 'js/admin-browser.js')), false);
+assert.equal(previewActiveModules.has(resolve(root, 'js/admin-browser.js')), true);
+
+const controllerSource = await readFile(resolve(root, 'js/recipe-detail-access-controller.js'), 'utf8');
+assert.equal(
+  localModuleSpecifiers(controllerSource).includes('./recipe-login-gate.js'),
+  true,
+  'Inactive foundations may depend on the inactive login-gate classifier'
+);
 assert.equal(PRODUCTION_OUTPUT_FILES.length, 51);
 assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 59);
 assert.equal(PRODUCTION_OUTPUT_FILES.includes(modulePath), false);
