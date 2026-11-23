@@ -404,6 +404,12 @@ async function reachableActiveModules(deploymentFileList) {
     for (const specifier of localModuleSpecifiers(source)) {
       const dependency = resolveLocalModule(module, specifier);
       const dependencyPath = repositoryPath(dependency);
+      if (modulePathFromRoot === 'app.js' && dependencyPath === 'js/dashboard-admin-link.js'
+        && !deploymentFiles.has(dependencyPath)) {
+        assert.equal(deploymentFiles.has('admin.html'), false);
+        assert.match(source, /if \(!pageRetired && availability\?\.adminPreviewAvailable === true\) \{[\s\S]*?import\('\.\/js\/dashboard-admin-link\.js'\)/);
+        continue;
+      }
       assert.equal(deploymentFiles.has(dependencyPath), true, `${dependencyPath} must be in a deployment inventory`);
       if (!visited.has(dependency)) queue.push(dependency);
     }
@@ -486,6 +492,8 @@ assert.equal(PRODUCTION_OUTPUT_FILES.includes('js/admin-browser.js'), false);
 assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.includes('js/admin-browser.js'), true);
 assert.equal(productionActiveModules.has(resolve(root, 'js/admin-browser.js')), false);
 assert.equal(previewActiveModules.has(resolve(root, 'js/admin-browser.js')), true);
+assert.equal(productionActiveModules.has(resolve(root, 'js/dashboard-admin-link.js')), false);
+assert.equal(previewActiveModules.has(resolve(root, 'js/dashboard-admin-link.js')), true);
 
 const controllerSource = await readFile(resolve(root, 'js/recipe-detail-access-controller.js'), 'utf8');
 assert.equal(
@@ -494,7 +502,7 @@ assert.equal(
   'Inactive foundations may depend on the inactive login-gate classifier'
 );
 assert.equal(PRODUCTION_OUTPUT_FILES.length, 51);
-assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 61);
+assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 62);
 assert.equal(PRODUCTION_OUTPUT_FILES.includes(modulePath), false);
 assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.includes(modulePath), false);
 

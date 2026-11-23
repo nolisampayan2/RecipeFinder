@@ -105,7 +105,7 @@ assert.match(runbook, /forward-only recovery/i);
 assert.match(runbook, /PostgreSQL runtime validation/i);
 assert.match(runbook, /Do not repair a failed cutover by restoring anonymous full-detail SELECT/i);
 assert.equal(PRODUCTION_OUTPUT_FILES.length, 51);
-assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 61);
+assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 62);
 for (const inventory of [PRODUCTION_OUTPUT_FILES, ADMIN_PREVIEW_OUTPUT_FILES]) {
   assert.equal(inventory.some((path) => path.startsWith('supabase/') || path.startsWith('tests/')), false);
 }

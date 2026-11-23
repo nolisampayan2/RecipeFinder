@@ -89,6 +89,7 @@ export const ADMIN_PREVIEW_FILES = Object.freeze([
   'admin.html',
   'admin.css',
   'js/admin-browser.js',
+  'js/dashboard-admin-link.js',
   'js/admin-cms.js',
   'js/admin-recipe-editor.js',
   'js/admin-recipe-validation.js',
@@ -373,6 +374,7 @@ async function buildVercelStaticSiteInternal(options) {
     await filesystem.mkdir(resolve(DEFAULT_TEMPORARY_DIRECTORY, 'js'), { recursive: true });
     await generatePublicSupabaseConfig({
       environment,
+      adminPreviewAvailable: adminPreviewEnabled,
       outputPath: resolve(DEFAULT_TEMPORARY_DIRECTORY, GENERATED_CONFIG_FILE),
       writeFileImpl: filesystem.writeFile,
     });

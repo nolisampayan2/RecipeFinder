@@ -40,6 +40,7 @@ let liveDashboard = null;
 let recipeMode = 'offline';
 let searchSource = 'offline';
 let dashboardAuth = null;
+let dashboardAdminLink = null;
 let recipeCatalogLoader = null;
 let dashboardAccountFavorites = null;
 let unsubscribeAccountFavorites = null;
@@ -163,7 +164,16 @@ function applyPrimaryCatalogResult(result) {
   }
 }
 
-function acceptDashboardClient(client) {
+function acceptDashboardClient(client, availability) {
+  if (!pageRetired && availability?.adminPreviewAvailable === true) {
+    void import('./js/dashboard-admin-link.js').then(({ createDashboardAdminLink }) => {
+      if (pageRetired) return;
+      const link = $('[data-admin-dashboard-link]');
+      if (!link) return;
+      dashboardAdminLink = createDashboardAdminLink({ link, client });
+      void dashboardAdminLink.handleAuthState(latestAuthState);
+    }).catch(() => { /* Preview navigation remains hidden when unavailable. */ });
+  }
   if (pageRetired || recipeCatalogLoader) return false;
   try {
     dashboardAccountFavorites = createDashboardAccountFavorites({
@@ -192,6 +202,7 @@ function acceptDashboardClient(client) {
 function acceptDashboardAuthState(authState) {
   if (pageRetired) return false;
   latestAuthState = authState;
+  if (dashboardAdminLink) void dashboardAdminLink.handleAuthState(authState);
   if (!dashboardAccountFavorites) {
     if (authState?.status === 'guest') {
       favoritesPresentation = Object.freeze({
@@ -609,5 +620,6 @@ window.addEventListener('pagehide', () => {
   unsubscribeAccountFavorites = null;
   dashboardAccountFavorites?.cleanup();
   recipeCatalogLoader?.cleanup();
+  dashboardAdminLink?.cleanup();
   dashboardAuth?.cleanup();
 }, { once: true });

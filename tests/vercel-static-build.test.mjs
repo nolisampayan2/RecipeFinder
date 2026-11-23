@@ -32,8 +32,10 @@ const CLEANUP_ERROR_PATTERN = new RegExp(
 let fixtureCounter = 0;
 
 assert.equal(PRODUCTION_OUTPUT_FILES.length, 51);
-assert.equal(ADMIN_PREVIEW_FILES.length, 10);
-assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 61);
+assert.equal(ADMIN_PREVIEW_FILES.length, 11);
+assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 62);
+assert.equal(ADMIN_PREVIEW_FILES.includes('js/dashboard-admin-link.js'), true);
+assert.equal(PRODUCTION_OUTPUT_FILES.includes('js/dashboard-admin-link.js'), false);
 assert.equal(ADMIN_PREVIEW_FILES.includes('js/admin-recipe-editor.js'), true);
 assert.equal(ADMIN_PREVIEW_FILES.includes('js/admin-recipe-validation.js'), true);
 for (const previewOnlyService of [
@@ -131,12 +133,21 @@ async function verifySuccessfulOutput(
     const imports = [...source.matchAll(/(?:from\s*|import\s*\()\s*["'](\.[^"']+)["']/g)]
       .map((match) => match[1]);
     for (const specifier of imports) {
+      if (relativePath === 'app.js' && specifier === './js/dashboard-admin-link.js' && !adminExpected) {
+        assert.match(source, /availability\?\.adminPreviewAvailable === true/);
+        assert.equal(await exists(resolve(result.outputDirectory, 'js/dashboard-admin-link.js')), false);
+        continue;
+      }
       assert.equal(await exists(resolve(result.outputDirectory, dirname(relativePath), specifier)), true);
     }
   }
 
   const generated = await realFilesystem.readFile(resolve(result.outputDirectory, 'js/supabase-config.js'), 'utf8');
   assert.match(generated, /synthetic-project\.supabase\.co/);
+  assert.match(generated, new RegExp(`ADMIN_CMS_PREVIEW_AVAILABLE = ${adminExpected}`));
+  const index = await realFilesystem.readFile(resolve(result.outputDirectory, 'index.html'), 'utf8');
+  assert.match(index, /data-admin-dashboard-link hidden/);
+  assert.doesNotMatch(index, /data-admin-dashboard-link[^>]+href=/);
   assert.doesNotMatch(generated, /service.?role|sb_secret_|password|token/i);
   assert.equal(await exists(resolve(fixture.root, '.dist-build-lock')), false);
   for (const adminFile of ADMIN_PREVIEW_FILES) {

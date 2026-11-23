@@ -96,7 +96,7 @@ assert.match(controlSql, /raise\s+exception\s+'Existing recipe conflicts/i);
 assert.doesNotMatch(controlSql, /\bon\s+conflict\s+do\s+update\b|\bdelete\s+from\b|\btruncate\b/i);
 assert.doesNotMatch(controlSql, /\b(update\s+public\.|alter\s+table|create\s+table|drop\s+table|create\s+policy|alter\s+policy)\b/i);
 assert.equal(PRODUCTION_OUTPUT_FILES.length, 51);
-assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 61);
+assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 62);
 for (const inventory of [PRODUCTION_OUTPUT_FILES, ADMIN_PREVIEW_OUTPUT_FILES]) {
   assert.equal(inventory.some((path) => path.startsWith('supabase/migrations/') || path.startsWith('tests/')), false);
 }

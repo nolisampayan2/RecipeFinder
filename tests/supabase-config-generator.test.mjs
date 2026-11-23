@@ -76,6 +76,8 @@ assert.throws(
 );
 
 const rendered = renderPublicSupabaseConfig({ url, publishableKey });
+assert.match(rendered, /ADMIN_CMS_PREVIEW_AVAILABLE = false/);
+assert.match(renderPublicSupabaseConfig({ url, publishableKey }, { adminPreviewAvailable: true }), /ADMIN_CMS_PREVIEW_AVAILABLE = true/);
 assert.match(rendered, /Generated public browser configuration/);
 assert.ok(rendered.includes(JSON.stringify(url)));
 assert.ok(rendered.includes(JSON.stringify(publishableKey)));
@@ -97,6 +99,7 @@ const generated = await generatePublicSupabaseConfig({
 assert.equal(generated.outputPath, 'virtual/js/supabase-config.js');
 assert.ok(generated.bytes > 0);
 assert.equal(writeCall[0], 'virtual/js/supabase-config.js');
+assert.match(writeCall[1], /ADMIN_CMS_PREVIEW_AVAILABLE = false/);
 assert.doesNotMatch(writeCall[1], /must-never-be-rendered/);
 assert.deepEqual(writeCall[2], {
   encoding: 'utf8',

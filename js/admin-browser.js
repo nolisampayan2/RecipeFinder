@@ -13,7 +13,7 @@ const ADMIN_MESSAGES = Object.freeze({
   [ADMIN_CMS_STATUS.LOADING]: 'Checking your session.',
   [ADMIN_CMS_STATUS.GUEST]: 'Sign in with an authorized administrator account.',
   [ADMIN_CMS_STATUS.CHECKING]: 'Verifying administrator access.',
-  [ADMIN_CMS_STATUS.DENIED]: 'Administrator access is required.',
+  [ADMIN_CMS_STATUS.DENIED]: 'Administrator access is required. Return to RecipeFinder using Dashboard in the sidebar.',
   [ADMIN_CMS_STATUS.READY]: 'Recipe catalog ready.',
   [ADMIN_CMS_STATUS.ERROR]: 'Admin access is temporarily unavailable.',
   [ADMIN_CMS_STATUS.RETIRED]: 'Admin session closed.',
@@ -354,16 +354,11 @@ export function renderAdminCmsState(
     elements.count.textContent = ready
       ? `${recipes.length}${recipes.length === allRecipes.length ? '' : ` of ${allRecipes.length}`} ${allRecipes.length === 1 ? 'recipe' : 'recipes'}`
       : '0 recipes';
-    const showSignIn = authenticated === false && ![
-      ADMIN_CMS_STATUS.LOADING,
-      ADMIN_CMS_STATUS.CHECKING,
-    ].includes(status);
-    const showLogout = authenticated === true && ![
-      ADMIN_CMS_STATUS.LOADING,
-    ].includes(status);
+    const showSignIn = status === ADMIN_CMS_STATUS.GUEST;
+    const showLogout = status === ADMIN_CMS_STATUS.READY;
     elements.signIn.hidden = !showSignIn;
     elements.logout.hidden = !showLogout;
-    elements.logout.disabled = status === ADMIN_CMS_STATUS.CHECKING;
+    elements.logout.disabled = !showLogout;
 
     elements.rows.replaceChildren();
     if (ready) {

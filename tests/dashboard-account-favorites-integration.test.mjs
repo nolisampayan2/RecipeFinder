@@ -93,6 +93,7 @@ function createLifecycleHarness() {
      let dashboardAccountFavorites = null;
      let unsubscribeAccountFavorites = null;
      let recipeCatalogLoader = null;
+      let dashboardAdminLink = null;
      let latestAuthState = Object.freeze({ status: 'loading', userId: null });
      let favoritesPresentation = Object.freeze({
        mode: 'account-loading', favoriteIds: Object.freeze([]), pendingRecipeIds: Object.freeze([]), message: 'Loading account favorites.',

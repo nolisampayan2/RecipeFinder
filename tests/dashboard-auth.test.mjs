@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createAuthSessionService } from '../js/auth-session.js';
 import { createDashboardAuthIntegration } from '../js/dashboard-auth.js';
+import { createDashboardAdminLink } from '../js/dashboard-admin-link.js';
 
 const confirmedUser = Object.freeze({
   id: '11111111-1111-4111-8111-111111111111',
@@ -29,6 +30,7 @@ class FakeElement {
 
   querySelector(selector) { return this.children.get(selector) ?? null; }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  removeAttribute(name) { this.attributes.delete(name); }
   addEventListener(type, listener) { this.listeners.set(type, listener); }
   removeEventListener(type, listener) {
     if (this.listeners.get(type) === listener) this.listeners.delete(type);
@@ -133,6 +135,15 @@ assert.equal(await observedHarness.integration.activate(), true);
 assert.equal(observedAuthStates.length, 4);
 assert.equal(observedAuthStates.slice(0, -1).every(({ status, userId }) => status === 'loading' && userId === null), true);
 assert.deepEqual(observedAuthStates.at(-1), { status: 'authenticated', userId: confirmedUser.id });
+const previewAvailability = [];
+const previewHarness = createIntegration(createFakeClient(), createFakeDocument(), {
+  loadConfig: async () => ({ SUPABASE_CONFIG: publicConfig, ADMIN_CMS_PREVIEW_AVAILABLE: true }),
+  onClientReady(_client, availability) { previewAvailability.push(availability); },
+});
+assert.equal(await previewHarness.integration.activate(), true);
+assert.deepEqual(previewAvailability, [{ adminPreviewAvailable: true }]);
+assert.equal(Object.isFrozen(previewAvailability[0]), true);
+previewHarness.integration.cleanup();
 assert.equal(observedAuthStates.every(Object.isFrozen), true);
 assert.doesNotMatch(JSON.stringify(observedAuthStates), /cook@|never-render|access_token|refresh_token/);
 const observedCountBeforeCleanup = observedAuthStates.length;
@@ -260,8 +271,8 @@ assert.equal(await dashboardLogoutHarness.integration.activate(), true);
 const dashboardLogout = dashboardLogoutHarness.integration.logout();
 const duplicateDashboardLogout = dashboardLogoutHarness.integration.logout();
 assert.equal(duplicateDashboardLogout, dashboardLogout);
-await Promise.resolve();
 assert.equal(dashboardLogoutHarness.ui.root.dataset.authState, 'loading');
+assert.equal(dashboardLogoutFake.counts.signOut, 1, 'Logout starts in the same synchronous turn');
 assert.notEqual(dashboardLogoutHarness.ui.identity.textContent, confirmedUser.email);
 dashboardLogoutFake.emit('SIGNED_IN', sessionFor());
 assert.equal(dashboardLogoutHarness.ui.root.dataset.authState, 'loading');
@@ -272,6 +283,48 @@ assert.equal(dashboardLogoutHarness.ui.root.dataset.authState, 'guest');
 assert.equal(dashboardLogoutHarness.ui.identity.textContent, 'Guest');
 assert.equal(dashboardLogoutHarness.ui.logout.hidden, true);
 assert.equal(dashboardLogoutFake.counts.signOut, 1);
+
+const adminLink = new FakeElement();
+adminLink.hidden = true;
+const adminLogoutRequest = deferred();
+const adminLogoutFake = createFakeClient({
+  session: sessionFor(),
+  signOut: () => adminLogoutRequest.promise,
+});
+let adminLinkController;
+const adminLogoutHarness = createIntegration(adminLogoutFake, createFakeDocument(), {
+  loadConfig: async () => ({ SUPABASE_CONFIG: publicConfig, ADMIN_CMS_PREVIEW_AVAILABLE: true }),
+  onClientReady(client, availability) {
+    assert.equal(availability.adminPreviewAvailable, true);
+    adminLinkController = createDashboardAdminLink({
+      client,
+      link: adminLink,
+      windowLike: null,
+      createAccessService: () => ({
+        check: () => Promise.resolve({ status: 'authorized' }),
+        invalidate() {},
+        cleanup() {},
+      }),
+    });
+  },
+  onAuthStateChange(state) { void adminLinkController?.handleAuthState(state); },
+});
+assert.equal(await adminLogoutHarness.integration.activate(), true);
+await Promise.resolve();
+assert.equal(adminLink.hidden, false, 'Verified Admin link becomes visible');
+assert.equal(adminLink.attributes.get('href'), 'admin.html');
+adminLogoutHarness.ui.logout.click();
+assert.equal(adminLogoutFake.counts.signOut, 1);
+assert.equal(adminLogoutHarness.ui.root.dataset.authState, 'loading');
+assert.equal(adminLink.hidden, true, 'Logout hides the Admin link synchronously');
+assert.equal(adminLink.attributes.has('href'), false, 'Logout removes the destination synchronously');
+const adminLogout = adminLogoutHarness.integration.logout();
+assert.equal(adminLogoutHarness.integration.logout(), adminLogout);
+assert.equal(adminLogoutFake.counts.signOut, 1);
+adminLogoutRequest.resolve({ error: null });
+assert.equal(await adminLogout, true);
+adminLinkController.cleanup();
+adminLogoutHarness.integration.cleanup();
 
 const failedLogout = createFakeClient({
   session: sessionFor(),
@@ -369,6 +422,35 @@ assert.equal(retainedClientHarness.clientCreations(), 1, 'Retry must retain the 
 const unhandledRejections = [];
 const captureUnhandled = (reason) => unhandledRejections.push(reason);
 process.on('unhandledRejection', captureUnhandled);
+
+const rejectedLogoutHarness = createIntegration(createFakeClient({
+  session: sessionFor(),
+  signOut: () => Promise.reject(new Error('PRIVATE_ASYNC_LOGOUT_REJECTION')),
+}));
+assert.equal(await rejectedLogoutHarness.integration.activate(), true);
+const rejectedLogout = rejectedLogoutHarness.integration.logout();
+assert.equal(rejectedLogoutHarness.ui.root.dataset.authState, 'loading');
+assert.equal(await rejectedLogout, false);
+assert.equal(rejectedLogoutHarness.ui.root.dataset.authState, 'error');
+assert.doesNotMatch(rejectedLogoutHarness.ui.identity.textContent, /PRIVATE_ASYNC_LOGOUT_REJECTION/);
+
+const synchronousLogoutFailure = createIntegration(createFakeClient(), createFakeDocument(), {
+  createSessionService() {
+    return {
+      subscribe(listener) {
+        listener({ status: 'authenticated', user: confirmedUser });
+        return () => true;
+      },
+      async bootstrap() { return true; },
+      logout() { throw new Error('PRIVATE_SYNC_LOGOUT_FAILURE'); },
+      cleanup() {},
+    };
+  },
+});
+assert.equal(await synchronousLogoutFailure.integration.activate(), true);
+assert.equal(await synchronousLogoutFailure.integration.logout(), false);
+assert.equal(synchronousLogoutFailure.ui.root.dataset.authState, 'error');
+assert.doesNotMatch(synchronousLogoutFailure.ui.identity.textContent, /PRIVATE_SYNC_LOGOUT_FAILURE/);
 
 for (const createHostileUi of [
   () => {
