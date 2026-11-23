@@ -275,6 +275,11 @@ const elements = {
 };
 elements.statusFilter.value = 'all';
 const fakeDocument = { createElement() { return element(); } };
+for (const status of [ADMIN_CMS_STATUS.LOADING, ADMIN_CMS_STATUS.ERROR]) {
+  assert.equal(renderAdminCmsState(elements, { status, recipes: [] }, fakeDocument), true);
+  assert.equal(elements.signIn.hidden, true, `${status} hides Sign In`);
+  assert.equal(elements.logout.hidden, true, `${status} hides Sign Out`);
+}
 assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.CHECKING, recipes: [] }, fakeDocument), true);
 assert.equal(elements.content.hidden, true);
 assert.equal(elements.rows.children.length, 0);
@@ -1364,6 +1369,11 @@ for (const id of [
 assert.match(html, /data-admin-create disabled/);
 assert.doesNotMatch(html, /\b(?:Delete|Publish|Unpublish)\b/);
 const css = await readFile(new URL('../admin.css', import.meta.url), 'utf8');
+const accountDisplayRule = '.admin-actions>*{display:flex;';
+const accountHiddenRule = '.admin-actions > [hidden] { display: none; }';
+assert.ok(css.includes(accountDisplayRule), 'Visible account control styling remains in place');
+assert.ok(css.includes(accountHiddenRule), 'Hidden account controls must have a scoped display override');
+assert.ok(css.indexOf(accountHiddenRule) > css.indexOf(accountDisplayRule), 'Hidden-state override follows the visible display rule');
 assert.match(css, /background-position:right 16px center/);
 assert.match(css, /\.admin-shell\{[^}]*grid-template-columns:260px minmax\(0,1fr\)/);
 assert.match(css, /\.admin-sidebar\{[^}]*position:sticky;[^}]*height:100dvh/);
