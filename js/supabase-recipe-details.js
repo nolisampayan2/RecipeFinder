@@ -93,7 +93,10 @@ function recipeFinderIdentity(recipeId) {
 
 function matchesRequestedIdentity(recipe, identity) {
   if (recipe.id !== identity.id) return false;
-  if (identity.fictionalExternalId === null) return true;
+  if (identity.fictionalExternalId === null) {
+    return recipe.source === 'database'
+      && (recipe.databaseSourceType === 'seed' || recipe.databaseSourceType === 'cms');
+  }
   return recipe.source === 'database'
     && recipe.databaseSourceType === 'external'
     && recipe.externalProvider === 'fictional-offline'

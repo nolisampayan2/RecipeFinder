@@ -112,6 +112,7 @@ assert.equal(validResult.stale, false);
 assert.equal(validResult.data.id, 'creamy-garlic-pasta');
 assert.equal(validResult.data.source, 'database');
 assert.equal(validResult.data.databaseSourceType, 'seed');
+assert.equal(validResult.data.externalProvider, undefined);
 assert.deepEqual(validResult.data.ingredients, [['Fettuccine', '300 g'], ['Garlic', '5 cloves']]);
 assert.deepEqual(validHarness.calls, [
   ['from', 'recipes'],
@@ -249,18 +250,31 @@ const cmsResult = await createAuthenticatedRecipeDetailService(fakeClient({
   data: [validRow({ id: 'cms:draft-fixture', source_type: 'cms' })], error: null,
 }).client).getPublishedById('cms:draft-fixture', AUTH_A);
 assert.equal(cmsResult.data?.databaseSourceType, 'cms');
+assert.equal(cmsResult.error, null);
 
-const curatedResult = await createAuthenticatedRecipeDetailService(fakeClient({
-  data: [validRow({
-    id: 'curated:42',
-    source_type: 'external',
-    external_provider: 'curated-provider',
-    external_id: '42',
+for (const [recipeId, row] of [
+  ['creamy-garlic-pasta', validRow({
+    source_type: 'external', external_provider: 'curated-provider', external_id: '42',
   })],
-  error: null,
-}).client).getPublishedById('curated:42', AUTH_A);
-assert.equal(curatedResult.data?.source, 'database');
-assert.equal(curatedResult.data?.externalProvider, 'curated-provider');
+  ['cms:11111111-2222-4333-8444-555555555555', validRow({
+    id: 'cms:11111111-2222-4333-8444-555555555555',
+    source_type: 'external', external_provider: 'curated-provider', external_id: '43',
+  })],
+  ['curated:42', validRow({
+    id: 'curated:42', source_type: 'external',
+    external_provider: 'curated-provider', external_id: '42',
+  })],
+  ['creamy-garlic-pasta', (({ source_type, ...row }) => row)(validRow())],
+  ['creamy-garlic-pasta', validRow({ source_type: undefined })],
+  ['creamy-garlic-pasta', validRow({ source_type: 'unexpected' })],
+]) {
+  const result = await createAuthenticatedRecipeDetailService(fakeClient({
+    data: [row], error: null,
+  }).client).getPublishedById(recipeId, AUTH_A);
+  assert.equal(result.data, null);
+  assert.equal(result.error.code, 'UNAVAILABLE');
+  assert.doesNotMatch(JSON.stringify(result), /curated-provider|external_id|source_type/);
+}
 
 for (const mismatchedRow of [
   fictionalRow({ external_provider: 'themealdb' }),
