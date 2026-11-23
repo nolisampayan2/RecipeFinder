@@ -209,7 +209,7 @@ for (const inventory of [PRODUCTION_OUTPUT_FILES, ADMIN_PREVIEW_OUTPUT_FILES]) {
   assert.equal(inventory.includes('js/dashboard-preview-catalog-adapter.js'), false);
 }
 assert.equal(PRODUCTION_OUTPUT_FILES.length, 51);
-assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 59);
+assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 61);
 const activeApp = await readFile(new URL('../app.js', import.meta.url), 'utf8');
 assert.equal(activeApp.includes('dashboard-preview-catalog-adapter.js'), false);
 

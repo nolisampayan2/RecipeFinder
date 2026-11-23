@@ -94,6 +94,8 @@ export const ADMIN_PREVIEW_FILES = Object.freeze([
   'js/admin-recipe-validation.js',
   'js/supabase-admin-access.js',
   'js/supabase-admin-recipes.js',
+  'js/supabase-admin-recipe-mutations.js',
+  'js/supabase-admin-taxonomies.js',
 ]);
 
 export const GENERATED_CONFIG_FILE = 'js/supabase-config.js';

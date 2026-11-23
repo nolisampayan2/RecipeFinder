@@ -103,7 +103,7 @@ assert.doesNotMatch(migration, /\b(insert\s+into|update\s+public\.|delete\s+from
 assert.doesNotMatch(migration, /\bexecute\s+format\s*\(/i);
 
 assert.equal(PRODUCTION_OUTPUT_FILES.length, 51);
-assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 59);
+assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 61);
 assert.equal(PRODUCTION_OUTPUT_FILES.includes('js/supabase-recipe-previews.js'), false);
 assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.includes('js/supabase-recipe-previews.js'), false);
 assert.equal(PRODUCTION_OUTPUT_FILES.some((path) => path.startsWith('supabase/')), false);

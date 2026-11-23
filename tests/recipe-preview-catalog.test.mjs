@@ -378,6 +378,6 @@ assert.doesNotMatch(indexSource, /recipe-preview-catalog\.js/);
 assert.equal(PRODUCTION_OUTPUT_FILES.includes(INACTIVE_MODULE), false);
 assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.includes(INACTIVE_MODULE), false);
 assert.equal(PRODUCTION_OUTPUT_FILES.length, 51);
-assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 59);
+assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 61);
 
 console.log('recipe-preview-catalog: offline composition contracts passed');

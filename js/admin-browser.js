@@ -1,8 +1,11 @@
 import { createAdminCmsCoordinator, ADMIN_CMS_STATUS } from './admin-cms.js';
 import { createAdminRecipeEditor } from './admin-recipe-editor.js';
-import { createAuthSessionService } from './auth-session.js';
+import { createAuthSessionService, isEmailConfirmed } from './auth-session.js';
 import { createSupabaseAdminAccessService } from './supabase-admin-access.js';
 import { createSupabaseAdminRecipeSource } from './supabase-admin-recipes.js';
+import { createSupabaseAdminRecipeMutationService } from './supabase-admin-recipe-mutations.js';
+import { createSupabaseAdminTaxonomySource } from './supabase-admin-taxonomies.js';
+import { isValidAccountUserId } from './supabase-favorites.js';
 import { createSupabasePageClientOwner } from './supabase-browser.js';
 import { SUPABASE_CLIENT_PROFILE } from './supabase-client.js';
 
@@ -318,7 +321,8 @@ export function renderAdminCmsState(
   query = '',
   statusFilter = 'all',
   editor = null,
-  authenticated = null
+  authenticated = null,
+  taxonomiesReady = Boolean(editor)
 ) {
   try {
     const status = Object.values(ADMIN_CMS_STATUS).includes(state?.status)
@@ -341,9 +345,10 @@ export function renderAdminCmsState(
     elements.content.hidden = !ready;
     elements.search.disabled = !ready;
     elements.statusFilter.disabled = !ready;
-    elements.create.disabled = !ready || !editor;
-    elements.create.setAttribute('aria-disabled', String(!ready || !editor));
-    elements.create.setAttribute('title', editor ? 'Create a recipe draft' : 'Draft saving is not activated in this build');
+    elements.create.disabled = !ready || !editor || !taxonomiesReady;
+    elements.create.setAttribute('aria-disabled', String(elements.create.disabled));
+    elements.create.setAttribute('title', editor && taxonomiesReady
+      ? 'Create a recipe draft' : 'Active categories and cuisines are required');
     elements.count.textContent = ready
       ? `${recipes.length}${recipes.length === allRecipes.length ? '' : ` of ${allRecipes.length}`} ${allRecipes.length === 1 ? 'recipe' : 'recipes'}`
       : '0 recipes';
@@ -381,7 +386,8 @@ export function renderAdminCmsState(
         edit.type = 'button';
         edit.className = 'admin-row-action';
         edit.textContent = 'Edit draft';
-        const editable = Boolean(editor && recipe.status === 'draft' && recipe.id.startsWith('cms:'));
+        const editable = Boolean(editor && taxonomiesReady && recipe.status === 'draft'
+          && recipe.sourceType === 'cms');
         edit.disabled = !editable;
         edit.setAttribute('aria-label', editable ? `Edit ${recipe.name}` : `${recipe.name} is read only`);
         if (editable) edit.addEventListener('click', () => { void editor.openEdit(recipe.id); });
@@ -416,13 +422,15 @@ export function createAdminPageActivation(options = {}) {
   const createCoordinator = options.createCoordinator ?? createAdminCmsCoordinator;
   const createEditor = options.createEditor ?? createAdminRecipeEditor;
   const createDrawer = options.createDrawer ?? createAdminDrawerController;
-  const createMutationService = options.createMutationService;
-  const createTaxonomySource = options.createTaxonomySource;
+  const createMutationService = options.createMutationService ?? createSupabaseAdminRecipeMutationService;
+  const createTaxonomySource = options.createTaxonomySource ?? createSupabaseAdminTaxonomySource;
   const elements = requireElements(documentLike);
   const drawer = createDrawer({ elements, documentLike, windowLike });
 
   let owner;
   let sessionService;
+  let authClient;
+  let adminAccess;
   let coordinator;
   let editor;
   let unsubscribeSession;
@@ -432,21 +440,245 @@ export function createAdminPageActivation(options = {}) {
   let retired = false;
   let listenersInstalled = false;
   let currentUserId = null;
+  let taxonomySource;
+  let taxonomiesReady = false;
+  let taxonomiesChecked = false;
+  let taxonomyGeneration = 0;
+  let savedNotice = false;
+  let sessionGeneration = 0;
+  let expiryMonitor = null;
+  let monitorRequest = null;
+  let monitorOutstanding = 0;
+  let monitorEpoch = 0;
+  let monitorSkippedTicks = 0;
+  let actionChecks = 0;
+  let transportOutstanding = 0;
+  let accessOutstanding = 0;
+  const checkLeases = [];
+  const now = options.now ?? Date.now;
+  // Each transport has a 15-second logical deadline. Three raw calls is the recovery
+  // budget: two abandoned monitors can coexist with one fresh reauthentication check.
+  const CHECK_TIMEOUT_MS = 15000;
 
-  const render = (state) => renderAdminCmsState(
-    elements,
-    state,
-    documentLike,
-    elements.search.value,
-    elements.statusFilter.value,
-    editor,
-    currentUserId === null ? false : true
-  );
+  const checkPendingDeadlines = () => {
+    let currentTime;
+    try { currentTime = now(); } catch { currentTime = NaN; }
+    for (const lease of [...checkLeases]) {
+      if (!Number.isFinite(currentTime) || currentTime >= lease.deadline) lease.retire(null);
+    }
+  };
+
+  const boundedSessionResponse = () => {
+    if (transportOutstanding >= 3) return Promise.resolve(null);
+    let raw;
+    try { raw = Promise.resolve(authClient.auth.getSession()); } catch { return Promise.resolve(null); }
+    transportOutstanding += 1;
+    void raw.then(() => { transportOutstanding -= 1; }, () => { transportOutstanding -= 1; });
+    return new Promise((resolve) => {
+      let timer;
+      let deadline;
+      try { deadline = now() + CHECK_TIMEOUT_MS; } catch { deadline = NaN; }
+      const lease = {
+        deadline,
+        retire(value) {
+          const index = checkLeases.indexOf(lease);
+          if (index < 0) return;
+          checkLeases.splice(index, 1);
+          try { (windowLike?.clearTimeout ?? globalThis.clearTimeout)(timer); } catch { /* Logical retirement is authoritative. */ }
+          resolve(value);
+        },
+      };
+      checkLeases.push(lease);
+      try {
+        timer = (windowLike?.setTimeout ?? globalThis.setTimeout)(() => lease.retire(null), CHECK_TIMEOUT_MS);
+      } catch { lease.retire(null); }
+      void raw.then((value) => {
+        let currentTime;
+        try { currentTime = now(); } catch { currentTime = NaN; }
+        lease.retire(Number.isFinite(currentTime) && currentTime < deadline ? value : null);
+      }, () => lease.retire(null));
+    });
+  };
+
+  const boundedAccessResponse = () => {
+    if (accessOutstanding >= 3) return Promise.resolve(null);
+    accessOutstanding += 1;
+    let raw;
+    try { raw = Promise.resolve(adminAccess.check()); } catch {
+      accessOutstanding -= 1;
+      return Promise.resolve(null);
+    }
+    void raw.then(() => { accessOutstanding -= 1; }, () => { accessOutstanding -= 1; });
+    return new Promise((resolve) => {
+      let timer;
+      let deadline;
+      try { deadline = now() + CHECK_TIMEOUT_MS; } catch { deadline = NaN; }
+      const lease = {
+        deadline,
+        retire(value) {
+          const index = checkLeases.indexOf(lease);
+          if (index < 0) return;
+          checkLeases.splice(index, 1);
+          try { (windowLike?.clearTimeout ?? globalThis.clearTimeout)(timer); } catch { /* Logical retirement is authoritative. */ }
+          resolve(value);
+        },
+      };
+      checkLeases.push(lease);
+      try {
+        timer = (windowLike?.setTimeout ?? globalThis.setTimeout)(() => lease.retire(null), CHECK_TIMEOUT_MS);
+      } catch { lease.retire(null); }
+      void raw.then((value) => {
+        let currentTime;
+        try { currentTime = now(); } catch { currentTime = NaN; }
+        lease.retire(Number.isFinite(currentTime) && currentTime < deadline ? value : null);
+      }, () => lease.retire(null));
+    });
+  };
+
+  const lockAdmin = () => {
+    sessionGeneration += 1;
+    monitorEpoch += 1;
+    currentUserId = null;
+    savedNotice = false;
+    taxonomiesReady = false;
+    taxonomyGeneration += 1;
+    editor?.setAuthorization(false);
+    try { void coordinator?.acceptAuthState({ status: 'error', user: null }); } catch { /* Fail closed. */ }
+  };
+
+  const verifySession = async (userId, requestGeneration = sessionGeneration, lockOnFailure = true) => {
+    if (retired || !isValidAccountUserId(userId)) return false;
+    try {
+      if (typeof authClient?.auth?.getSession !== 'function') throw new TypeError('Auth unavailable.');
+      const response = await boundedSessionResponse();
+      if (retired || requestGeneration !== sessionGeneration || currentUserId !== userId) return false;
+      const session = response?.error === null ? response?.data?.session : null;
+      if (session && typeof session.access_token === 'string' && session.access_token.trim()
+        && typeof session.refresh_token === 'string' && session.refresh_token.trim()
+        && Number.isSafeInteger(session.expires_at)
+        && session.expires_at > Math.floor(now() / 1000)
+        && isEmailConfirmed(session.user)
+        && session.user.id === userId) return true;
+    } catch { /* Session refresh or inspection failed. */ }
+    if (lockOnFailure && !retired && requestGeneration === sessionGeneration && currentUserId === userId) lockAdmin();
+    return false;
+  };
+
+  const authorizeAction = async (userId) => {
+    const requestGeneration = sessionGeneration;
+    if (retired || currentUserId !== userId || coordinator?.getState().status !== ADMIN_CMS_STATUS.READY) return false;
+    monitorEpoch += 1;
+    actionChecks += 1;
+    try {
+      if (!await verifySession(userId, requestGeneration)) return false;
+      adminAccess.invalidate();
+      const access = await boundedAccessResponse();
+      if (retired || requestGeneration !== sessionGeneration || currentUserId !== userId
+        || coordinator?.getState().status !== ADMIN_CMS_STATUS.READY) return false;
+      if (access?.status !== 'authorized') {
+        lockAdmin();
+        return false;
+      }
+      return verifySession(userId, requestGeneration);
+    } catch {
+      if (!retired && requestGeneration === sessionGeneration && currentUserId === userId) lockAdmin();
+      return false;
+    } finally {
+      actionChecks -= 1;
+      monitorEpoch += 1;
+      monitorRequest = null;
+      monitorSkippedTicks = 0;
+    }
+  };
+
+  const checkSessionPeriodically = () => {
+    checkPendingDeadlines();
+    if (retired || actionChecks > 0 || coordinator?.getState().status !== ADMIN_CMS_STATUS.READY
+      || !currentUserId) return;
+    if (monitorRequest || monitorOutstanding >= 2) {
+      // Six observed five-second ticks are a second fail-closed bound. Wall-clock
+      // deadlines above also reject late results when browser timers are throttled.
+      monitorSkippedTicks += 1;
+      if (monitorSkippedTicks >= 6) lockAdmin();
+      return;
+    }
+    const userId = currentUserId;
+    const requestGeneration = sessionGeneration;
+    const requestEpoch = monitorEpoch;
+    monitorSkippedTicks = 0;
+    const request = verifySession(userId, requestGeneration, false);
+    monitorRequest = request;
+    monitorOutstanding += 1;
+    void request.then((valid) => {
+      if (!retired && requestGeneration === sessionGeneration && requestEpoch === monitorEpoch
+        && currentUserId === userId && valid !== true) lockAdmin();
+    }).catch(() => {
+      if (!retired && requestGeneration === sessionGeneration && requestEpoch === monitorEpoch
+        && currentUserId === userId) lockAdmin();
+    }).finally(() => {
+      monitorOutstanding -= 1;
+      if (monitorRequest === request) monitorRequest = null;
+    });
+  };
+  const onPageResume = () => {
+    checkPendingDeadlines();
+    if (checkLeases.length === 0 && !monitorRequest) checkSessionPeriodically();
+  };
+
+  const render = (state) => {
+    const rendered = renderAdminCmsState(
+      elements,
+      state,
+      documentLike,
+      elements.search.value,
+      elements.statusFilter.value,
+      editor,
+      currentUserId === null ? false : true,
+      taxonomiesReady
+    );
+    if (rendered && state.status === ADMIN_CMS_STATUS.READY && editor && !taxonomiesReady) {
+      const explanation = taxonomiesChecked
+        ? 'Draft editor requires active categories and cuisines.'
+        : 'Loading draft category and cuisine choices.';
+      elements.status.textContent = `${savedNotice ? 'Draft saved. ' : 'Recipe catalog ready. '}${explanation}`;
+      elements.status.classList.toggle('is-error', taxonomiesChecked);
+    } else if (rendered && savedNotice && state.status === ADMIN_CMS_STATUS.READY) {
+      elements.status.textContent = 'Draft saved. Recipe catalog ready.';
+    } else if (rendered && savedNotice && state.status === ADMIN_CMS_STATUS.ERROR) {
+      elements.status.textContent = 'Draft saved, but the catalog could not be refreshed.';
+    }
+    return rendered;
+  };
   const onSearch = () => { if (coordinator) render(coordinator.getState()); };
   const onStatusFilter = () => { if (coordinator) render(coordinator.getState()); };
-  const onCreate = () => { if (editor) void editor.openCreate(); };
+  const onCreate = () => {
+    if (editor && taxonomiesReady && coordinator?.getState().status === ADMIN_CMS_STATUS.READY) {
+      void editor.openCreate();
+    }
+  };
+  const checkTaxonomies = (userId) => {
+    const requestGeneration = ++taxonomyGeneration;
+    void (async () => {
+      let ready = false;
+      try {
+        const [categories, cuisines] = await Promise.all([
+          taxonomySource.listCategories(), taxonomySource.listCuisines(),
+        ]);
+        ready = categories?.error === null && cuisines?.error === null
+          && Array.isArray(categories.data) && Array.isArray(cuisines.data)
+          && categories.data.some((item) => item?.isActive === true)
+          && cuisines.data.some((item) => item?.isActive === true);
+      } catch { /* Taxonomy failures keep draft actions disabled. */ }
+      if (retired || requestGeneration !== taxonomyGeneration || currentUserId !== userId
+        || coordinator?.getState().status !== ADMIN_CMS_STATUS.READY) return;
+      taxonomiesReady = ready;
+      taxonomiesChecked = true;
+      render(coordinator.getState());
+    })();
+  };
   const onLogout = () => {
     drawer.close();
+    lockAdmin();
     if (sessionService) void sessionService.logout();
   };
 
@@ -466,12 +698,18 @@ export function createAdminPageActivation(options = {}) {
             profile: SUPABASE_CLIENT_PROFILE.APPLICATION_SESSION,
           });
           const client = owner.initialize(SUPABASE_CLIENT_PROFILE.APPLICATION_SESSION);
-          const adminAccess = createAccessService(client);
+          authClient = client;
+          adminAccess = createAccessService(client);
           const recipeSource = createRecipeSource(client);
-          coordinator = createCoordinator({ adminAccess, recipeSource });
+          const boundedAdminAccess = Object.freeze({
+            check: boundedAccessResponse,
+            invalidate: () => adminAccess.invalidate(),
+            cleanup: () => adminAccess.cleanup(),
+          });
+          coordinator = createCoordinator({ adminAccess: boundedAdminAccess, recipeSource });
           if (typeof createMutationService === 'function' && typeof createTaxonomySource === 'function') {
             const mutationService = createMutationService(client);
-            const taxonomySource = createTaxonomySource(client);
+            taxonomySource = createTaxonomySource(client);
             editor = createEditor({
               elements: editorElements(elements.root),
               documentLike,
@@ -482,27 +720,58 @@ export function createAdminPageActivation(options = {}) {
               createRecipeId: options.createRecipeId,
               confirmDiscard: options.confirmDiscard,
               onSaved: (recipe) => {
+                savedNotice = true;
                 try { Promise.resolve(coordinator.refreshRecipes()).catch(() => {}); } catch { /* Refresh fails closed. */ }
                 observeCallback(options.onSaved, recipe);
               },
               onAuthorizationLost: () => {
+                savedNotice = false;
                 try { Promise.resolve(coordinator.refreshRecipes()).catch(() => {}); } catch { /* Refresh fails closed. */ }
                 observeCallback(options.onAuthorizationLost);
               },
+              authorizeAction,
             });
           }
           sessionService = createSessionService(client);
           unsubscribeCoordinator = coordinator.subscribe((state) => {
             if (state.status !== ADMIN_CMS_STATUS.READY) drawer.close();
+            taxonomyGeneration += 1;
+            taxonomiesReady = false;
+            taxonomiesChecked = false;
             editor?.setAuthorization(state.status === ADMIN_CMS_STATUS.READY, currentUserId);
             render(state);
+            if (state.status === ADMIN_CMS_STATUS.READY && editor && taxonomySource) {
+              checkTaxonomies(currentUserId);
+            }
           });
           unsubscribeSession = sessionService.subscribe((state) => {
+            sessionGeneration += 1;
+            monitorEpoch += 1;
+            monitorRequest = null;
+            monitorSkippedTicks = 0;
             drawer.close();
+            savedNotice = false;
+            const previousUserId = currentUserId;
+            const sameReadyAccount = state?.status === 'authenticated'
+              && previousUserId === state?.user?.id
+              && coordinator.getState().status === ADMIN_CMS_STATUS.READY;
             currentUserId = state?.status === 'authenticated' && typeof state?.user?.id === 'string'
               ? state.user.id
               : null;
-            void coordinator.acceptAuthState(state);
+            if (currentUserId && !sameReadyAccount) {
+              const requestGeneration = sessionGeneration;
+              void coordinator.acceptAuthState({ status: 'loading', user: null });
+              void verifySession(currentUserId, requestGeneration).then((valid) => {
+                if (valid && !retired && requestGeneration === sessionGeneration) {
+                  return coordinator.acceptAuthState(state);
+                }
+                return false;
+              }).catch(() => { if (!retired && requestGeneration === sessionGeneration) lockAdmin(); });
+            } else if (sameReadyAccount) {
+              void verifySession(currentUserId, sessionGeneration);
+            } else {
+              void coordinator.acceptAuthState(state);
+            }
           });
           if (!listenersInstalled) {
             elements.search.addEventListener('input', onSearch);
@@ -512,6 +781,11 @@ export function createAdminPageActivation(options = {}) {
             listenersInstalled = true;
           }
           await sessionService.bootstrap();
+          documentLike?.addEventListener?.('visibilitychange', onPageResume);
+          windowLike?.addEventListener?.('focus', onPageResume);
+          if (!retired && typeof windowLike?.setInterval === 'function') {
+            expiryMonitor = windowLike.setInterval(checkSessionPeriodically, 5000);
+          }
           return !retired && activationGeneration === generation;
         } catch {
           if (!retired && activationGeneration === generation) {
@@ -527,7 +801,21 @@ export function createAdminPageActivation(options = {}) {
     cleanup() {
       if (retired) return false;
       retired = true;
+      for (const lease of [...checkLeases]) lease.retire(null);
+      try { documentLike?.removeEventListener?.('visibilitychange', onPageResume); } catch { /* Page retirement remains terminal. */ }
+      try { windowLike?.removeEventListener?.('focus', onPageResume); } catch { /* Page retirement remains terminal. */ }
+      if (expiryMonitor !== null) {
+        try { windowLike?.clearInterval?.(expiryMonitor); } catch { /* Cleanup remains terminal. */ }
+        expiryMonitor = null;
+      }
+      sessionGeneration += 1;
+      monitorEpoch += 1;
+      monitorRequest = null;
       generation += 1;
+      taxonomyGeneration += 1;
+      taxonomiesReady = false;
+      taxonomiesChecked = false;
+      savedNotice = false;
       try { unsubscribeSession?.(); } catch { /* Subscription cleanup stays isolated. */ }
       try { unsubscribeCoordinator?.(); } catch { /* View cleanup stays isolated. */ }
       try { sessionService?.cleanup?.(); } catch { /* Auth cleanup stays isolated. */ }

@@ -12,6 +12,7 @@ export const ADMIN_RECIPE_SELECT = [
   'id',
   'name',
   'status',
+  'source_type',
   'category:recipe_categories!inner(name)',
   'cuisine:cuisines!inner(name)',
 ].join(',');
@@ -190,18 +191,20 @@ function mapDense(value, mapper) {
 
 export function normalizeAdminRecipeRow(row) {
   if (!isRecord(row)) throw new TypeError('Recipe row is malformed.');
-  for (const field of ['id', 'name', 'status', 'category', 'cuisine']) {
+  for (const field of ['id', 'name', 'status', 'source_type', 'category', 'cuisine']) {
     if (!Object.prototype.hasOwnProperty.call(row, field)) throw new TypeError('Recipe row is incomplete.');
   }
   const id = requiredText(row.id);
   if (!RECIPE_ID.test(id)) throw new TypeError('Recipe ID is invalid.');
   if (!STATUSES.has(row.status)) throw new TypeError('Recipe status is invalid.');
+  if (!SOURCE_TYPES.has(row.source_type)) throw new TypeError('Recipe source is invalid.');
   return Object.freeze({
     id,
     name: requiredText(row.name),
     category: joinedName(row.category),
     cuisine: joinedName(row.cuisine),
     status: row.status,
+    sourceType: row.source_type,
   });
 }
 

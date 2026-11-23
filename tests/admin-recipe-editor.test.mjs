@@ -185,7 +185,7 @@ assert.equal(elements.panel.hidden, false);
 assert.equal(elements.title.textContent, 'Create recipe draft');
 assert.equal(elements.name.focused, true);
 assert.equal(elements.ingredients.children.length, 1);
-assert.equal(elements.categoryId.children[2].textContent, 'Archived (inactive)');
+assert.equal(elements.categoryId.children.length, 2, 'Inactive categories are not selectable');
 
 assert.equal(await editor.submitDraft(), false, 'Empty form must fail local validation');
 assert.equal(elements.name.attributes['aria-invalid'], 'true');
@@ -205,7 +205,7 @@ assert.equal(await editor.submitDraft(), true);
 assert.equal(editor.isDirty(), false);
 const createCall = calls.find((call) => call[0] === 'createDraft');
 assert.deepEqual(createCall[2], { recipeId: RECIPE_ID, creatorUserId: USER_A });
-assert.match(elements.status.textContent, /offline test environment/i);
+assert.equal(elements.status.textContent, 'Draft saved.');
 assert.equal(savedRecipes.length, 1, 'Confirmed create must notify saved observers once');
 
 assert.equal(await editor.openEdit(RECIPE_ID), true);
@@ -357,6 +357,58 @@ assert.equal(cleanupIngredientName.listenerCount(), 0, 'Cleanup must release ing
 assert.equal(editor.cleanup(), false);
 assert.equal(calls.some((call) => call[0] === 'mutationCleanup'), true);
 assert.equal(calls.some((call) => call[0] === 'taxonomyCleanup'), true);
+
+const unavailableElements = editorElements();
+const unavailableEditor = createAdminRecipeEditor({
+  elements: unavailableElements,
+  documentLike: { createElement: element },
+  windowLike: element(),
+  recipeSource: { async getById() { throw new Error('Unexpected detail request'); } },
+  mutationService: { createDraft() { throw new Error('Unexpected write'); }, editDraft() { throw new Error('Unexpected write'); } },
+  taxonomySource: {
+    async listCategories() { return { data: [{ id: 3, name: 'Archived', isActive: false }], error: null }; },
+    async listCuisines() { return { data: [{ id: 2, name: 'Filipino', isActive: true }], error: null }; },
+  },
+});
+unavailableEditor.setAuthorization(true, USER_A);
+assert.equal(await unavailableEditor.openCreate(), false, 'No active category prevents opening a draft');
+assert.equal(unavailableElements.panel.hidden, true);
+assert.equal(unavailableEditor.cleanup(), true);
+
+const guardedElements = editorElements();
+let guardAllowsAction = true;
+let guardedMutationCalls = 0;
+const guardedEditor = createAdminRecipeEditor({
+  elements: guardedElements,
+  documentLike: { createElement: element },
+  windowLike: element(),
+  recipeSource: { async getById() { return { data: detail(), error: null }; } },
+  mutationService: {
+    async createDraft() { guardedMutationCalls += 1; return { status: 'success', data: { id: RECIPE_ID, updatedAt: UPDATED_AT } }; },
+    async editDraft() { guardedMutationCalls += 1; return { status: 'success', data: { id: RECIPE_ID, updatedAt: UPDATED_AT } }; },
+    invalidate() {}, cleanup() {},
+  },
+  taxonomySource: {
+    async listCategories() { return { data: [{ id: 1, name: 'Dinner', isActive: true }], error: null }; },
+    async listCuisines() { return { data: [{ id: 2, name: 'Filipino', isActive: true }], error: null }; },
+    invalidate() {}, cleanup() {},
+  },
+  createRecipeId: () => RECIPE_ID,
+  authorizeAction: async () => guardAllowsAction,
+});
+guardedEditor.setAuthorization(true, USER_A);
+assert.equal(await guardedEditor.openCreate(), true);
+fillValid(guardedElements, 'Protected Draft');
+guardAllowsAction = false;
+assert.equal(await guardedEditor.submitDraft(), false, 'Fresh authorization is required before mutation');
+assert.equal(guardedMutationCalls, 0);
+assert.equal(guardedElements.name.value, 'Protected Draft', 'A transient denied check does not discard a draft before session loss is confirmed');
+guardAllowsAction = true;
+assert.equal(await guardedEditor.submitDraft(), true, 'Valid renewed authorization preserves the editing session');
+assert.equal(guardedMutationCalls, 1);
+guardedEditor.setAuthorization(false);
+assertEditorDataCleared(guardedElements, 'Authorization loss after a renewed session');
+assert.equal(guardedEditor.cleanup(), true);
 
 const source = await readFile(new URL('../js/admin-recipe-editor.js', import.meta.url), 'utf8');
 assert.doesNotMatch(source, /innerHTML|insertAdjacentHTML|document\.write|createClient|service_role/i);

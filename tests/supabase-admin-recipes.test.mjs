@@ -19,6 +19,7 @@ function row(overrides = {}) {
     id: 'cms:recipe-one',
     name: 'Recipe One',
     status: 'draft',
+    source_type: 'cms',
     category: { name: 'Dinner' },
     cuisine: { name: 'Filipino' },
     ...overrides,
@@ -115,8 +116,16 @@ assert.deepEqual(normalized, {
   category: 'Dinner',
   cuisine: 'Filipino',
   status: 'draft',
+  sourceType: 'cms',
 });
 assert.equal(Object.isFrozen(normalized), true);
+for (const sourceType of ['seed', 'cms', 'external']) {
+  assert.equal(normalizeAdminRecipeRow(row({ source_type: sourceType })).sourceType, sourceType);
+}
+for (const sourceType of [undefined, null, '', 'unknown', 'CMS']) {
+  assert.throws(() => normalizeAdminRecipeRow(row({ source_type: sourceType })), /source/i);
+}
+assert.match(ADMIN_RECIPE_SELECT, /source_type/, 'Catalog request must include provenance');
 
 const validFake = fakeClient({
   data: [row(), row({ id: 'cms:recipe-two', name: 'Recipe Two', status: 'published' })],

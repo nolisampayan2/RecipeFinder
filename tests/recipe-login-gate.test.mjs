@@ -494,7 +494,7 @@ assert.equal(
   'Inactive foundations may depend on the inactive login-gate classifier'
 );
 assert.equal(PRODUCTION_OUTPUT_FILES.length, 51);
-assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 59);
+assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 61);
 assert.equal(PRODUCTION_OUTPUT_FILES.includes(modulePath), false);
 assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.includes(modulePath), false);
 

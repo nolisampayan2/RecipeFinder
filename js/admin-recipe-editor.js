@@ -66,10 +66,12 @@ export function createAdminRecipeEditor({
   confirmDiscard = (message) => globalThis.confirm?.(message) === true,
   onSaved = () => {},
   onAuthorizationLost = () => {},
+  authorizeAction = async () => true,
 } = {}) {
   requireElements(elements);
   requireDependencies(recipeSource, mutationService, taxonomySource);
-  if (typeof documentLike?.createElement !== 'function' || typeof createRecipeId !== 'function') {
+  if (typeof documentLike?.createElement !== 'function' || typeof createRecipeId !== 'function'
+    || typeof authorizeAction !== 'function') {
     throw new TypeError('Admin recipe editor environment is required.');
   }
 
@@ -211,9 +213,10 @@ export function createAdminRecipeEditor({
     placeholder.textContent = `Select ${label}`;
     select.replaceChildren(placeholder);
     for (const item of values) {
+      if (item.isActive !== true) continue;
       const option = documentLike.createElement('option');
       option.value = String(item.id);
-      option.textContent = item.isActive ? item.name : `${item.name} (inactive)`;
+      option.textContent = item.name;
       select.append(option);
     }
   };
@@ -227,6 +230,8 @@ export function createAdminRecipeEditor({
     if (categories?.error !== null || cuisines?.error !== null || !Array.isArray(categories?.data) || !Array.isArray(cuisines?.data)) {
       return false;
     }
+    if (!categories.data.some((item) => item?.isActive === true)
+      || !cuisines.data.some((item) => item?.isActive === true)) return false;
     populateTaxonomy(elements.categoryId, categories.data, 'category');
     populateTaxonomy(elements.cuisineId, cuisines.data, 'cuisine');
     return true;
@@ -289,6 +294,14 @@ export function createAdminRecipeEditor({
     if (retired || !authorizedUserId || pending || !mayDiscard()) return false;
     const requestGeneration = ++generation;
     setBusy(true);
+    const requestUserId = authorizedUserId;
+    let permitted = false;
+    try { permitted = await authorizeAction(requestUserId); } catch { /* Authorization fails closed. */ }
+    if (retired || requestGeneration !== generation || authorizedUserId !== requestUserId) return false;
+    if (permitted !== true) {
+      setBusy(false);
+      return false;
+    }
     clearErrors();
     announce('Loading draft editor.');
     elements.panel.hidden = false;
@@ -329,6 +342,16 @@ export function createAdminRecipeEditor({
   const submit = async (event) => {
     event?.preventDefault?.();
     if (retired || !authorizedUserId || !mode || pending) return false;
+    const authorizationGeneration = generation;
+    const authorizationUserId = authorizedUserId;
+    setBusy(true);
+    let permitted = false;
+    try { permitted = await authorizeAction(authorizationUserId); } catch { /* Authorization fails closed. */ }
+    if (retired || authorizationGeneration !== generation || authorizedUserId !== authorizationUserId) return false;
+    if (permitted !== true) {
+      setBusy(false);
+      return false;
+    }
     clearErrors();
     const input = collectInput();
     try {
@@ -342,6 +365,7 @@ export function createAdminRecipeEditor({
       const field = error instanceof AdminRecipeValidationError ? error.field : null;
       showError(field, 'Check this field and try again.');
       announce('Please correct the highlighted recipe fields.', 'error');
+      setBusy(false);
       return false;
     }
     const requestGeneration = generation;
@@ -377,7 +401,7 @@ export function createAdminRecipeEditor({
     mode = 'edit';
     expectedUpdatedAt = result.data.updatedAt;
     dirty = false;
-    announce('Draft saved in the injected offline test environment.', 'success');
+    announce('Draft saved.', 'success');
     notify(onSaved, result.data);
     return true;
   };

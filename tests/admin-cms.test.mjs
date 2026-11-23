@@ -15,8 +15,9 @@ const USER_B = '22222222-2222-4222-8222-222222222222';
 
 function deferred() {
   let resolve;
-  const promise = new Promise((accept) => { resolve = accept; });
-  return { promise, resolve };
+  let reject;
+  const promise = new Promise((accept, fail) => { resolve = accept; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 function dependencies({ access, recipes } = {}) {
@@ -53,7 +54,7 @@ assert.equal(denied.getState().status, ADMIN_CMS_STATUS.DENIED);
 assert.equal(deniedDeps.counts.recipes, 0, 'Regular users must never request privileged recipe data');
 
 const recipes = Object.freeze([Object.freeze({
-  id: 'cms:one', name: 'Safe <Recipe>', category: 'Dinner', cuisine: 'Filipino', status: 'draft',
+  id: 'cms:one', name: 'Safe <Recipe>', category: 'Dinner', cuisine: 'Filipino', status: 'draft', sourceType: 'cms',
 })]);
 const adminDeps = dependencies({
   access: { status: ADMIN_ACCESS_STATUS.AUTHORIZED },
@@ -129,7 +130,7 @@ await cleanupRequest;
 assert.equal(cleanup.getState().status, ADMIN_CMS_STATUS.RETIRED);
 
 const refreshedRecipes = Object.freeze([Object.freeze({
-  id: 'cms:two', name: 'Refreshed Draft', category: 'Lunch', cuisine: 'Filipino', status: 'draft',
+  id: 'cms:two', name: 'Refreshed Draft', category: 'Lunch', cuisine: 'Filipino', status: 'draft', sourceType: 'cms',
 })]);
 let refreshRows = recipes;
 const refreshDeps = dependencies({
@@ -308,9 +309,9 @@ assert.equal(elements.create.disabled, true, 'Live activation remains read only 
 
 const longName = `Long <Recipe> & safe ${'name '.repeat(45)}`.trim();
 const mobileRecipes = Object.freeze([
-  Object.freeze({ id: 'cms:mobile-draft', name: longName, category: 'Dinner', cuisine: 'Filipino', status: 'draft' }),
-  Object.freeze({ id: 'cms:published', name: 'Published CMS Recipe', category: 'Lunch', cuisine: 'Filipino', status: 'published' }),
-  Object.freeze({ id: 'external:provider:one', name: 'External Draft', category: 'Lunch', cuisine: 'Other', status: 'draft' }),
+  Object.freeze({ id: 'cms:mobile-draft', name: longName, category: 'Dinner', cuisine: 'Filipino', status: 'draft', sourceType: 'cms' }),
+  Object.freeze({ id: 'cms:published', name: 'Published CMS Recipe', category: 'Lunch', cuisine: 'Filipino', status: 'published', sourceType: 'cms' }),
+  Object.freeze({ id: 'external:provider:one', name: 'External Draft', category: 'Lunch', cuisine: 'Other', status: 'draft', sourceType: 'external' }),
 ]);
 const editedRecipeIds = [];
 const mobileEditor = { openEdit(id) { editedRecipeIds.push(id); return Promise.resolve(true); } };
@@ -324,6 +325,20 @@ editableAction.emit('click');
 assert.deepEqual(editedRecipeIds, ['cms:mobile-draft'], 'Edit action must retain the exact recipe identity');
 assert.equal(elements.rows.children[1].children[4].children[0].disabled, true, 'Published recipes remain read only');
 assert.equal(elements.rows.children[2].children[4].children[0].disabled, true, 'Non-CMS recipes remain read only');
+for (const [id, sourceType, status, editable] of [
+  ['cms:valid', 'cms', 'draft', true],
+  ['legacy-cms-id', 'cms', 'draft', true],
+  ['cms:external', 'external', 'draft', false],
+  ['cms:seed', 'seed', 'draft', false],
+  ['cms:missing', undefined, 'draft', false],
+  ['cms:malformed', 'other', 'draft', false],
+  ['cms:published', 'cms', 'published', false],
+]) {
+  const candidate = Object.freeze({ id, sourceType, status, name: 'Candidate', category: 'Dinner', cuisine: 'Filipino' });
+  assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.READY, recipes: [candidate] }, fakeDocument, '', 'all', mobileEditor), true);
+  assert.equal(elements.rows.children[0].children[4].children[0].disabled, !editable, `${sourceType} ${status} ${id}`);
+}
+assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.READY, recipes: mobileRecipes }, fakeDocument, '', 'all', mobileEditor), true);
 assert.equal(elements.count.textContent, '3 recipes');
 assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.READY, recipes: mobileRecipes }, fakeDocument, 'external', 'draft', mobileEditor), true);
 assert.equal(elements.rows.children.length, 1, 'Search and status filtering continue to share the same row renderer');
@@ -568,21 +583,49 @@ const pageDocument = {
   querySelector(selector) { return selector === '[data-admin-app]' ? pageElements.root : null; },
   createElement() { return element(); },
 };
-const sharedClient = { auth: {} };
+let pageNow = 1_800_000_000_000;
+let pageSessionExpiresAt = Math.floor(pageNow / 1000) + 60;
+let pageSessionUserId = USER_A;
+let pageSessionFailure = false;
+let pageIntervalTick;
+let pageSessionCalls = 0;
+const pageSessionQueue = [];
+const sharedClient = { auth: {
+  async getSession() {
+    pageSessionCalls += 1;
+    if (pageSessionQueue.length) return pageSessionQueue.shift().promise;
+    if (pageSessionFailure) return { data: null, error: { message: 'PRIVATE_REFRESH_ERROR' } };
+    return { data: { session: {
+      access_token: 'synthetic-access', refresh_token: 'synthetic-refresh',
+      expires_at: pageSessionExpiresAt,
+      user: { id: pageSessionUserId, email_confirmed_at: '2026-11-23T00:00:00.000Z' },
+    } }, error: null };
+  },
+} };
 const acceptedClients = [];
 const editorAuthorizations = [];
 let ownerCreations = 0;
 let sessionListener;
 let editorCallbacks;
 let pageAccessStatus = ADMIN_ACCESS_STATUS.AUTHORIZED;
+let pageAccessDeferred = null;
 let pageRecipeRows = recipes;
 let pageRecipeLoads = 0;
+let pageCreateOpens = 0;
+let pageTaxonomyActive = true;
+let delayTaxonomy = false;
+let resolveDelayedTaxonomy;
 let optionalSavedObservers = 0;
 let optionalAuthorizationObservers = 0;
 let drawerCloseCount = 0;
 let drawerCleanupCount = 0;
 const page = createAdminPageActivation({
   documentLike: pageDocument,
+  windowLike: {
+    setInterval(callback) { pageIntervalTick = callback; return 1; },
+    clearInterval() { pageIntervalTick = null; },
+  },
+  now: () => pageNow,
   sdk: {},
   loadConfig: async () => ({ SUPABASE_CONFIG: { fictional: true } }),
   createClientOwner(options) {
@@ -602,7 +645,7 @@ const page = createAdminPageActivation({
   createAccessService(client) {
     acceptedClients.push(client);
     return {
-      check: async () => ({ status: pageAccessStatus }),
+      check: async () => pageAccessDeferred ? pageAccessDeferred.promise : ({ status: pageAccessStatus }),
       invalidate: () => true,
       cleanup: () => true,
     };
@@ -621,15 +664,22 @@ const page = createAdminPageActivation({
   },
   createTaxonomySource(client) {
     acceptedClients.push(client);
-    return { listCategories() {}, listCuisines() {}, invalidate() {}, cleanup() {} };
+    return {
+      async listCategories() {
+        if (delayTaxonomy) return new Promise((resolve) => { resolveDelayedTaxonomy = resolve; });
+        return { data: [{ id: 1, name: 'Dinner', isActive: pageTaxonomyActive }], error: null };
+      },
+      async listCuisines() { return { data: [{ id: 2, name: 'Filipino', isActive: true }], error: null }; },
+      invalidate() {}, cleanup() {},
+    };
   },
-  createEditor({ mutationService, taxonomySource, onSaved, onAuthorizationLost }) {
+  createEditor({ mutationService, taxonomySource, onSaved, onAuthorizationLost, authorizeAction }) {
     assert.equal(typeof mutationService.createDraft, 'function');
     assert.equal(typeof taxonomySource.listCategories, 'function');
-    editorCallbacks = { onSaved, onAuthorizationLost };
+    editorCallbacks = { onSaved, onAuthorizationLost, authorizeAction };
     return {
-      openCreate: async () => true,
-      openEdit: async () => true,
+      openCreate: async () => { if (!await authorizeAction(pageSessionUserId)) return false; pageCreateOpens += 1; return true; },
+      openEdit: async () => authorizeAction(pageSessionUserId),
       setAuthorization(authorized, userId) { editorAuthorizations.push([authorized, userId]); return true; },
       cleanup: () => true,
     };
@@ -652,6 +702,7 @@ const page = createAdminPageActivation({
 assert.equal(await page.activate(), true);
 await Promise.resolve();
 await Promise.resolve();
+await new Promise((resolve) => setImmediate(resolve));
 assert.equal(ownerCreations, 1);
 assert.deepEqual(acceptedClients, [sharedClient, sharedClient, sharedClient, sharedClient, sharedClient]);
 assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.READY);
@@ -659,14 +710,115 @@ assert.deepEqual(editorAuthorizations.at(-1), [true, USER_A]);
 assert.equal(pageElements.signIn.hidden, true);
 assert.equal(pageElements.logout.hidden, false);
 assert.equal(pageElements.rows.children.length, 1);
+assert.equal(pageElements.create.disabled, false, 'Create unlocks after authorized active taxonomies load');
+pageElements.create.emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(pageCreateOpens, 1);
+assert.equal(typeof pageIntervalTick, 'function');
+pageSessionExpiresAt = Math.floor(pageNow / 1000) + 120;
+pageIntervalTick();
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.READY, 'A successful token refresh retains editor access');
+const olderMonitor = deferred();
+pageSessionQueue.push(olderMonitor);
+const callsBeforePendingMonitor = pageSessionCalls;
+pageIntervalTick();
+pageIntervalTick();
+pageIntervalTick();
+assert.equal(pageSessionCalls, callsBeforePendingMonitor + 1, 'Periodic checks remain single-flight');
+assert.equal(await editorCallbacks.authorizeAction(USER_A), true, 'A newer action can confirm the session while a monitor is pending');
+const newerMonitor = deferred();
+pageSessionQueue.push(newerMonitor);
+pageIntervalTick();
+newerMonitor.resolve({ data: { session: {
+  access_token: 'synthetic', refresh_token: 'synthetic', expires_at: pageSessionExpiresAt,
+  user: { id: USER_A, email_confirmed_at: '2026-11-23T00:00:00.000Z' },
+} }, error: null });
+await new Promise((resolve) => setImmediate(resolve));
+olderMonitor.reject(new Error('PRIVATE_OLDER_MONITOR_FAILURE'));
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.READY, 'Older monitor failure cannot undo a newer successful monitor');
+assert.deepEqual(editorAuthorizations.at(-1), [true, USER_A]);
+const stuckMonitor = deferred();
+pageSessionQueue.push(stuckMonitor);
+pageIntervalTick();
+for (let index = 0; index < 5; index += 1) pageIntervalTick();
+assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.READY);
+pageIntervalTick();
+assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.ERROR, 'A monitor that never resolves fails closed after bounded ticks');
+stuckMonitor.resolve({ data: null, error: { message: 'PRIVATE_LATE_FAILURE' } });
+sessionListener({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.READY);
+pageAccessDeferred = deferred();
+const accountAAction = editorCallbacks.authorizeAction(USER_A);
+await Promise.resolve();
+pageSessionUserId = USER_B;
+sessionListener({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_B } });
+pageAccessDeferred.resolve({ status: ADMIN_ACCESS_STATUS.AUTHORIZED });
+assert.equal(await accountAAction, false, 'Late Account A authorization cannot approve an Account B action');
+pageAccessDeferred = null;
+await new Promise((resolve) => setImmediate(resolve));
+pageSessionUserId = USER_A;
+sessionListener({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+pageSessionFailure = true;
+pageIntervalTick();
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.ERROR, 'Silent refresh failure locks the Admin page');
+assert.equal(pageElements.create.disabled, true);
+assert.deepEqual(editorAuthorizations.at(-1), [false, null]);
+pageSessionFailure = false;
+sessionListener({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.READY);
+const switchedMonitor = deferred();
+pageSessionQueue.push(switchedMonitor);
+pageIntervalTick();
+pageSessionUserId = USER_B;
+sessionListener({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_B } });
+await new Promise((resolve) => setImmediate(resolve));
+const accountBMonitor = deferred();
+pageSessionQueue.push(accountBMonitor);
+pageIntervalTick();
+pageSessionUserId = USER_A;
+sessionListener({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+const callsBeforeCappedMonitor = pageSessionCalls;
+pageIntervalTick();
+assert.equal(pageSessionCalls, callsBeforeCappedMonitor, 'Account changes cannot accumulate more than two periodic checks');
+switchedMonitor.resolve({ data: { session: {
+  access_token: 'synthetic', refresh_token: 'synthetic', expires_at: pageSessionExpiresAt,
+  user: { id: USER_A, email_confirmed_at: '2026-11-23T00:00:00.000Z' },
+} }, error: null });
+accountBMonitor.resolve({ data: null, error: { message: 'PRIVATE_STALE_ACCOUNT_B_FAILURE' } });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.READY, 'Late monitor results cannot displace a newer account state');
+pageNow = (pageSessionExpiresAt + 1) * 1000;
+pageElements.create.emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(pageCreateOpens, 1, 'An expired session cannot open another draft');
+assert.equal(pageElements.create.disabled, true);
+pageNow = 1_800_000_000_000;
+pageSessionExpiresAt = Math.floor(pageNow / 1000) + 60;
+sessionListener({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+const pageLoadsBeforeSave = pageRecipeLoads;
 pageRecipeRows = refreshedRecipes;
+pageTaxonomyActive = false;
 editorCallbacks.onSaved({ id: 'cms:created' });
 await new Promise((resolve) => setImmediate(resolve));
-assert.equal(pageRecipeLoads, 2, 'Confirmed create must trigger exactly one catalog refresh');
+assert.equal(pageRecipeLoads, pageLoadsBeforeSave + 1, 'Confirmed create must trigger exactly one catalog refresh');
+assert.match(pageElements.status.textContent, /Draft saved/, 'Confirmed save remains visible after editor closes');
 assert.equal(pageElements.rows.children[0].children[0].textContent, 'Refreshed Draft');
+assert.equal(pageElements.create.disabled, true, 'No active category keeps Create locked');
+assert.match(pageElements.status.textContent, /Draft editor requires active categories and cuisines/);
+pageTaxonomyActive = true;
 editorCallbacks.onSaved({ id: 'cms:edited' });
 await new Promise((resolve) => setImmediate(resolve));
-assert.equal(pageRecipeLoads, 3, 'Confirmed edit must trigger exactly one catalog refresh');
+assert.equal(pageRecipeLoads, pageLoadsBeforeSave + 2, 'Confirmed edit must trigger exactly one catalog refresh');
+assert.match(pageElements.status.textContent, /Draft saved/);
+assert.equal(pageElements.create.disabled, false, 'Create restores after active taxonomy is available');
 assert.equal(optionalSavedObservers, 2, 'Optional observers remain independent from both refreshes');
 pageElements.search.value = 'missing';
 pageElements.search.emit('input');
@@ -676,23 +828,389 @@ pageAccessStatus = ADMIN_ACCESS_STATUS.DENIED;
 editorCallbacks.onAuthorizationLost();
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.DENIED);
+assert.equal(pageElements.create.disabled, true, 'Authorization loss locks draft creation');
 assert.equal(pageElements.rows.children.length, 0, 'Authorization loss must clear privileged catalog rows');
 assert.equal(optionalAuthorizationObservers, 1);
 pageAccessStatus = ADMIN_ACCESS_STATUS.AUTHORIZED;
+delayTaxonomy = true;
 const drawerClosesBeforeSwitch = drawerCloseCount;
+  pageSessionUserId = USER_B;
 sessionListener({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_B } });
 await new Promise((resolve) => setImmediate(resolve));
 assert.ok(drawerCloseCount > drawerClosesBeforeSwitch, 'Direct account switching closes the drawer');
+assert.equal(pageElements.create.disabled, true, 'Pending taxonomy remains locked after account switch');
+assert.match(pageElements.status.textContent, /Loading draft category and cuisine choices/);
+assert.equal(typeof resolveDelayedTaxonomy, 'function');
+const logoutMonitor = deferred();
+pageSessionQueue.push(logoutMonitor);
+pageIntervalTick();
 pageElements.logout.emit('click');
 await Promise.resolve();
+logoutMonitor.resolve({ data: { session: {
+  access_token: 'synthetic', refresh_token: 'synthetic', expires_at: pageSessionExpiresAt,
+  user: { id: USER_B, email_confirmed_at: '2026-11-23T00:00:00.000Z' },
+} }, error: null });
+resolveDelayedTaxonomy({ data: [{ id: 1, name: 'Dinner', isActive: true }], error: null });
+await new Promise((resolve) => setImmediate(resolve));
 assert.ok(drawerCloseCount >= 3, 'Loading, authentication changes, and logout close the drawer safely');
 assert.deepEqual(editorAuthorizations.at(-1), [false, null]);
+assert.equal(pageElements.create.disabled, true, 'Logout locks draft creation');
 assert.equal(pageElements.signIn.hidden, false);
 assert.equal(pageElements.logout.hidden, true);
+delayTaxonomy = false;
+pageSessionUserId = USER_A;
+sessionListener({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+const retirementMonitor = deferred();
+pageSessionQueue.push(retirementMonitor);
+pageIntervalTick();
 assert.equal(page.cleanup(), true);
 assert.equal(page.cleanup(), false);
+assert.equal(pageIntervalTick, null, 'Retirement clears the session monitor timer');
+retirementMonitor.resolve({ data: { session: {
+  access_token: 'synthetic', refresh_token: 'synthetic', expires_at: pageSessionExpiresAt,
+  user: { id: USER_A, email_confirmed_at: '2026-11-23T00:00:00.000Z' },
+} }, error: null });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.RETIRED, 'Late monitor success cannot publish after cleanup');
 assert.equal(drawerCleanupCount, 1);
 assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.RETIRED);
+
+// Exercise the default page-to-editor wiring with fake services and DOM only.
+function integrationElement() {
+  const node = element();
+  node.append = (...children) => { for (const child of children) { child.parent = node; node.children.push(child); } };
+  node.replaceChildren = (...children) => { node.children = []; node.append(...children); };
+  node.remove = () => { if (node.parent) node.parent.children = node.parent.children.filter((child) => child !== node); };
+  return node;
+}
+const integrationRoot = integrationElement();
+const integrationMap = new Map();
+for (const [selector, original] of pageSelectors) integrationMap.set(selector, integrationElement());
+const editorSelectors = [
+  '[data-admin-editor]', '[data-admin-editor-form]', '[data-admin-editor-title]',
+  '[data-admin-editor-status]', '[data-admin-editor-close]', '[data-admin-editor-cancel]',
+  '[data-admin-editor-save]', '[data-editor-add-ingredient]', '[data-editor-ingredients]',
+];
+for (const selector of editorSelectors) integrationMap.set(selector, integrationElement());
+for (const field of ['name', 'description', 'categoryId', 'cuisineId', 'imageUrl',
+  'fallbackImageUrl', 'tutorialUrl', 'ingredients', 'instructions', 'form']) {
+  integrationMap.set(`[data-error-for="${field}"]`, integrationElement());
+  if (field !== 'form' && field !== 'ingredients') integrationMap.set(`[data-editor-field="${field}"]`, integrationElement());
+}
+integrationMap.get('[data-admin-status-filter]').value = 'all';
+integrationRoot.querySelector = (selector) => integrationMap.get(selector) ?? null;
+const integrationDocument = {
+  querySelector(selector) { return selector === '[data-admin-app]' ? integrationRoot : null; },
+  createElement: integrationElement,
+};
+let integrationSessionListener;
+let integrationAdminStatus = ADMIN_ACCESS_STATUS.AUTHORIZED;
+let integrationAccessDeferred = null;
+let integrationHoldRoleChecks = false;
+let integrationAccessCheckCalls = 0;
+const integrationHeldRoleChecks = [];
+let integrationCreateCalls = 0;
+let integrationEditCalls = 0;
+let integrationLoads = 0;
+let integrationExpiresAt = Math.floor(Date.now() / 1000) + 60;
+let integrationTick;
+let integrationNow = Date.now();
+let integrationTimerId = 0;
+const integrationTimers = new Map();
+const integrationSessionQueue = [];
+let integrationSessionCalls = 0;
+const advanceIntegrationClock = async (milliseconds) => {
+  integrationNow += milliseconds;
+  for (const [id, timer] of [...integrationTimers]) {
+    if (timer.due > integrationNow) continue;
+    integrationTimers.delete(id);
+    timer.callback();
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+};
+const integrationRows = [Object.freeze({
+  id: 'cms:11111111-2222-4333-8444-555555555555', name: 'Existing Draft',
+  category: 'Dinner', cuisine: 'Filipino', status: 'draft', sourceType: 'cms',
+})];
+const integrationClient = { auth: { async getSession() {
+  integrationSessionCalls += 1;
+  if (integrationSessionQueue.length) return integrationSessionQueue.shift().promise;
+  return { data: { session: {
+    access_token: 'synthetic', refresh_token: 'synthetic',
+    expires_at: integrationExpiresAt,
+    user: { id: USER_A, email_confirmed_at: '2026-11-23T00:00:00.000Z' },
+  } }, error: null };
+} } };
+const integrationPage = createAdminPageActivation({
+  documentLike: integrationDocument,
+  windowLike: {
+    setInterval(callback) { integrationTick = callback; return 1; },
+    clearInterval() { integrationTick = null; },
+    setTimeout(callback, delay) {
+      const id = ++integrationTimerId;
+      integrationTimers.set(id, { callback, due: integrationNow + delay });
+      return id;
+    },
+    clearTimeout(id) { integrationTimers.delete(id); },
+  },
+  now: () => integrationNow,
+  loadConfig: async () => ({ SUPABASE_CONFIG: { fictional: true } }),
+  createClientOwner: () => ({ initialize: () => integrationClient }),
+  createDrawer: () => ({ close() {}, cleanup() {} }),
+  createSessionService: () => ({
+    subscribe(listener) { integrationSessionListener = listener; listener({ status: 'loading', user: null }); return () => {}; },
+    async bootstrap() { integrationSessionListener({ status: 'authenticated', user: { id: USER_A } }); },
+    cleanup() {},
+  }),
+  createAccessService: () => ({
+    async check() {
+      integrationAccessCheckCalls += 1;
+      if (integrationHoldRoleChecks) {
+        const pending = deferred();
+        integrationHeldRoleChecks.push(pending);
+        return pending.promise;
+      }
+      return integrationAccessDeferred?.promise ?? { status: integrationAdminStatus };
+    },
+    invalidate() {}, cleanup() {},
+  }),
+  createRecipeSource: () => ({
+    async listAll() { integrationLoads += 1; return { data: integrationRows, error: null }; },
+    async getById() { return { data: {
+      id: integrationRows[0].id, name: 'Existing Draft', description: 'Private draft.',
+      categoryId: 1, cuisineId: 2, imageUrl: 'https://images.example.test/draft.jpg',
+      fallbackImageUrl: null, tutorialUrl: null,
+      ingredients: [{ name: 'Rice', measurement: '1 cup' }], instructions: 'Cook.',
+      status: 'draft', sourceType: 'cms', updatedAt: '2026-11-23T00:00:00.000Z',
+    }, error: null }; },
+    invalidate() {}, cleanup() {},
+  }),
+  createMutationService: () => ({
+    async createDraft() { integrationCreateCalls += 1; return { status: 'success', data: { id: integrationRows[0].id, updatedAt: '2026-11-23T00:00:00.000Z' } }; },
+    async editDraft() { integrationEditCalls += 1; return { status: 'success', data: { id: integrationRows[0].id, updatedAt: '2026-11-23T00:00:00.000Z' } }; },
+    invalidate() {}, cleanup() {},
+  }),
+  createTaxonomySource: () => ({
+    async listCategories() { return { data: [{ id: 1, name: 'Dinner', isActive: true }], error: null }; },
+    async listCuisines() { return { data: [{ id: 2, name: 'Filipino', isActive: true }], error: null }; },
+    invalidate() {}, cleanup() {},
+  }),
+  createRecipeId: () => integrationRows[0].id,
+});
+assert.equal(await integrationPage.activate(), true);
+await new Promise((resolve) => setImmediate(resolve));
+integrationMap.get('[data-admin-create]').emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationMap.get('[data-admin-editor]').hidden, false, 'Default editor opens through the real page');
+for (const [field, value] of Object.entries({
+  name: 'New Draft', description: 'A draft.', categoryId: '1', cuisineId: '2',
+  imageUrl: 'https://images.example.test/draft.jpg', instructions: 'Cook.',
+})) integrationMap.get(`[data-editor-field="${field}"]`).value = value;
+const ingredientRow = integrationMap.get('[data-editor-ingredients]').children[0];
+ingredientRow.children[0].children[1].value = 'Rice';
+ingredientRow.children[1].children[1].value = '1 cup';
+assert.equal(await integrationMap.get('[data-admin-editor-form]').emit('submit', { preventDefault() {} }), true);
+assert.equal(integrationCreateCalls, 1);
+await new Promise((resolve) => setImmediate(resolve));
+assert.ok(integrationLoads >= 2, 'Save refreshes the page catalog');
+integrationMap.get('[data-admin-rows]').children[0].children[4].children[0].emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationMap.get('[data-editor-field="name"]').value, 'Existing Draft');
+integrationMap.get('[data-editor-field="name"]').value = 'Unsaved same-account edit';
+integrationMap.get('[data-editor-field="name"]').emit('input');
+integrationExpiresAt = Math.floor(Date.now() / 1000) + 120;
+integrationTick();
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationMap.get('[data-editor-field="name"]').value, 'Unsaved same-account edit', 'Successful refresh retains unsaved draft content');
+assert.equal(await integrationMap.get('[data-admin-editor-form]').emit('submit', { preventDefault() {} }), true);
+assert.equal(integrationEditCalls, 1, 'Authorized Edit reaches the real editor mutation path');
+await new Promise((resolve) => setImmediate(resolve));
+integrationMap.get('[data-admin-rows]').children[0].children[4].children[0].emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+integrationExpiresAt = Math.floor(Date.now() / 1000) - 1;
+assert.equal(await integrationMap.get('[data-admin-editor-form]').emit('submit', { preventDefault() {} }), false);
+assert.equal(integrationEditCalls, 1, 'Expired session cannot mutate an existing draft');
+assert.equal(integrationMap.get('[data-admin-editor]').hidden, true, 'Expiry hides the protected draft');
+assert.equal(integrationMap.get('[data-editor-field="name"]').value, '');
+integrationExpiresAt = Math.floor(Date.now() / 1000) + 60;
+integrationSessionListener({ status: 'authenticated', user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+integrationMap.get('[data-admin-rows]').children[0].children[4].children[0].emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationMap.get('[data-editor-field="name"]').value, 'Existing Draft');
+integrationAdminStatus = ADMIN_ACCESS_STATUS.DENIED;
+assert.equal(await integrationMap.get('[data-admin-editor-form]').emit('submit', { preventDefault() {} }), false);
+assert.equal(integrationEditCalls, 1, 'Admin denial prevents a draft edit');
+assert.equal(integrationMap.get('[data-admin-editor]').hidden, true, 'Denial hides protected draft content');
+assert.equal(integrationMap.get('[data-editor-field="name"]').value, '');
+integrationAdminStatus = ADMIN_ACCESS_STATUS.AUTHORIZED;
+integrationSessionListener({ status: 'authenticated', user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+const unresolvedMonitorA = deferred();
+integrationSessionQueue.push(unresolvedMonitorA);
+integrationTick();
+await Promise.resolve();
+integrationMap.get('[data-admin-create]').emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+const unresolvedMonitorB = deferred();
+integrationSessionQueue.push(unresolvedMonitorB);
+integrationTick();
+await Promise.resolve();
+for (let tick = 0; tick < 6; tick += 1) integrationTick();
+assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.ERROR,
+  'Two unresolved monitor transports eventually lock the page');
+await advanceIntegrationClock(15_001);
+integrationExpiresAt = Math.floor(integrationNow / 1000) + 60;
+const freshSession = deferred();
+const freshRole = deferred();
+integrationSessionQueue.push(freshSession);
+integrationAccessDeferred = freshRole;
+const callsBeforeRecovery = integrationSessionCalls;
+integrationSessionListener({ status: 'authenticated', user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationSessionCalls, callsBeforeRecovery + 1,
+  'Reauthentication starts a new session request while old transports are unresolved');
+assert.notEqual(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY,
+  'Cached authentication cannot publish a ready page while fresh verification is pending');
+freshSession.resolve({ data: { session: {
+  access_token: 'synthetic', refresh_token: 'synthetic', expires_at: integrationExpiresAt,
+  user: { id: USER_A, email_confirmed_at: '2026-11-23T00:00:00.000Z' },
+} }, error: null });
+await new Promise((resolve) => setImmediate(resolve));
+assert.notEqual(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY,
+  'A valid session alone does not bypass fresh administrator role verification');
+freshRole.resolve({ status: ADMIN_ACCESS_STATUS.AUTHORIZED });
+integrationAccessDeferred = null;
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY,
+  'Fresh verified reauthentication succeeds with two older transports unresolved');
+const callsBeforeFreshMonitor = integrationSessionCalls;
+integrationTick();
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationSessionCalls, callsBeforeFreshMonitor + 1,
+  'Fresh monitoring starts before either old underlying request settles');
+assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY);
+unresolvedMonitorA.reject(new Error('PRIVATE_OLD_MONITOR_FAILURE'));
+unresolvedMonitorB.resolve({ data: null, error: { message: 'PRIVATE_OLD_MONITOR_FAILURE' } });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY,
+  'Retired monitor results cannot displace recovered authorization');
+
+for (const action of ['create', 'edit', 'save']) {
+  if (integrationRoot.dataset.adminState !== ADMIN_CMS_STATUS.READY) {
+    integrationSessionListener({ status: 'authenticated', user: { id: USER_A } });
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  if (action === 'save') {
+    integrationMap.get('[data-admin-rows]').children[0].children[4].children[0].emit('click');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(integrationMap.get('[data-admin-editor]').hidden, false);
+  }
+  const pendingAction = deferred();
+  integrationSessionQueue.push(pendingAction);
+  const mutationsBefore = integrationCreateCalls + integrationEditCalls;
+  if (action === 'create') integrationMap.get('[data-admin-create]').emit('click');
+  if (action === 'edit') integrationMap.get('[data-admin-rows]').children[0].children[4].children[0].emit('click');
+  if (action === 'save') void integrationMap.get('[data-admin-editor-form]').emit('submit', { preventDefault() {} });
+  await Promise.resolve();
+  await advanceIntegrationClock(15_001);
+  assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.ERROR,
+    `Hung ${action} authorization fails closed within the deadline`);
+  assert.equal(integrationCreateCalls + integrationEditCalls, mutationsBefore,
+    `Hung ${action} cannot reach a mutation`);
+  assert.equal(integrationMap.get('[data-admin-editor]').hidden, true,
+    `Hung ${action} clears protected editor content`);
+  pendingAction.resolve({ data: { session: {
+    access_token: 'synthetic', refresh_token: 'synthetic',
+    expires_at: Math.floor(integrationNow / 1000) + 60,
+    user: { id: USER_A, email_confirmed_at: '2026-11-23T00:00:00.000Z' },
+  } }, error: null });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.ERROR,
+    `Late ${action} authorization cannot restore access`);
+  integrationExpiresAt = Math.floor(integrationNow / 1000) + 60;
+}
+integrationSessionListener({ status: 'authenticated', user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+const unresolvedAccess = deferred();
+integrationAccessDeferred = unresolvedAccess;
+const accessMutationsBefore = integrationCreateCalls + integrationEditCalls;
+integrationMap.get('[data-admin-create]').emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+await advanceIntegrationClock(15_001);
+assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.ERROR,
+  'An unresolved action role check also has a bounded lifetime');
+unresolvedAccess.resolve({ status: ADMIN_ACCESS_STATUS.AUTHORIZED });
+integrationAccessDeferred = null;
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationCreateCalls + integrationEditCalls, accessMutationsBefore,
+  'Late role success cannot authorize a mutation');
+
+for (const transition of [
+  { status: 'guest', user: null },
+  { status: 'authenticated', user: { id: USER_B } },
+]) {
+  integrationExpiresAt = Math.floor(integrationNow / 1000) + 60;
+  integrationSessionListener({ status: 'authenticated', user: { id: USER_A } });
+  await new Promise((resolve) => setImmediate(resolve));
+  const pending = deferred();
+  integrationSessionQueue.push(pending);
+  const before = integrationCreateCalls + integrationEditCalls;
+  integrationMap.get('[data-admin-create]').emit('click');
+  await Promise.resolve();
+  integrationSessionListener(transition);
+  pending.resolve({ data: { session: {
+    access_token: 'synthetic', refresh_token: 'synthetic',
+    expires_at: Math.floor(integrationNow / 1000) + 60,
+    user: { id: USER_A, email_confirmed_at: '2026-11-23T00:00:00.000Z' },
+  } }, error: null });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(integrationCreateCalls + integrationEditCalls, before,
+    'Logout or account switching invalidates the pending action');
+  assert.notEqual(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY);
+}
+integrationSessionListener({ status: 'authenticated', user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+integrationExpiresAt = Math.floor(integrationNow / 1000) + 60;
+integrationHoldRoleChecks = true;
+const roleChecksBeforeTransitions = integrationAccessCheckCalls;
+for (let index = 0; index < 20; index += 1) {
+  integrationSessionListener({ status: 'loading', user: null });
+  integrationSessionListener({ status: 'authenticated', user: { id: USER_A } });
+  await new Promise((resolve) => setImmediate(resolve));
+}
+assert.equal(integrationAccessCheckCalls - roleChecksBeforeTransitions, 3,
+  'Twenty transitions cannot start more than three unresolved role transports');
+assert.equal(integrationHeldRoleChecks.length, 3);
+assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.ERROR,
+  'Exhausted role verification capacity fails closed');
+integrationHeldRoleChecks[0].resolve({ status: ADMIN_ACCESS_STATUS.AUTHORIZED });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.ERROR,
+  'Old role success cannot restore authorization');
+integrationHoldRoleChecks = false;
+integrationSessionListener({ status: 'authenticated', user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY,
+  'Fresh role verification recovers when underlying request capacity returns');
+integrationHeldRoleChecks[1].reject(new Error('PRIVATE_OLDER_ROLE_FAILURE'));
+integrationHeldRoleChecks[2].resolve({ status: ADMIN_ACCESS_STATUS.AUTHORIZED });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY,
+  'Late role results cannot displace recovered authorization');
+const retirementAction = deferred();
+integrationSessionQueue.push(retirementAction);
+const retirementMutationsBefore = integrationCreateCalls + integrationEditCalls;
+integrationMap.get('[data-admin-create]').emit('click');
+await Promise.resolve();
+assert.equal(integrationPage.cleanup(), true);
+assert.equal(integrationTimers.size, 0, 'Cleanup retires all pending authorization deadlines');
+retirementAction.reject(new Error('PRIVATE_LATE_ACTION_FAILURE'));
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.RETIRED);
+assert.equal(integrationCreateCalls + integrationEditCalls, retirementMutationsBefore,
+  'Cleanup prevents late action authorization and mutations');
 
 const html = await readFile(new URL('../admin.html', import.meta.url), 'utf8');
 assert.match(html, /data-admin-app/);
@@ -716,6 +1234,7 @@ assert.match(html, /<table>/, 'Desktop catalog remains a semantic table');
 assert.match(html, /<caption class="sr-only">RecipeFinder recipe administration catalog<\/caption>/);
 assert.match(html, /<tbody data-admin-rows><\/tbody>/);
 assert.match(html, /data-admin-editor-form/);
+assert.doesNotMatch(html, /offline injected test environment/i);
 assert.match(html, /data-error-for="form"/);
 for (const id of [
   'admin-recipe-column', 'admin-category-column', 'admin-cuisine-column',
@@ -742,6 +1261,7 @@ assert.match(css, /\.admin-table-wrap tbody td \.status-badge\{justify-self:star
 assert.match(css, /\.admin-table-wrap \.admin-row-action\{width:100%;min-height:44px\}/);
 const browserSource = await readFile(new URL('../js/admin-browser.js', import.meta.url), 'utf8');
 assert.doesNotMatch(browserSource, /innerHTML|insertAdjacentHTML|document\.write|service_role|\.insert\s*\(|\.update\s*\(|\.delete\s*\(|\.upsert\s*\(/i);
-assert.doesNotMatch(browserSource, /supabase-admin-recipe-mutations|supabase-admin-taxonomies/);
+assert.match(browserSource, /createSupabaseAdminRecipeMutationService/);
+assert.match(browserSource, /createSupabaseAdminTaxonomySource/);
 
-console.log('Offline Admin CMS authorization and read-only UI tests passed with fakes only.');
+console.log('Offline Admin CMS authorization and draft-editor activation tests passed with fakes only.');
