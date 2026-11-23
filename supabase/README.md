@@ -603,3 +603,39 @@ verification, and separate authorization, and before retaining any production da
 - The seed is rerunnable with the overwrite behavior described above.
 - Supabase CLI/PostgreSQL execution was not performed in Phase 2B. SQL must be parser-tested and migration-tested later in an approved local environment.
 - External API storage/import semantics remain deferred. The schema reserves namespaced text IDs and external provenance fields without integrating a provider.
+
+## Option B conditional migration 002 draft (not approved for execution)
+
+`migrations/202611230001_published_recipe_preview_rpc.sql` defines the public,
+`SECURITY INVOKER` preview contract. The revised
+`migrations/202611230002_recipe_detail_seed_data.sql` places restrictive
+anonymous recipe grants before its 16 recipe inserts in one transaction. This
+source-only draft must **not** be applied automatically or treated as an
+authorization to deploy. The earlier negative test allowing anonymous full
+recipe reads (item 1 above) describes the foundation state, not the Option B
+target state.
+
+Before any separately approved application, verify the exact target's
+`supabase_migrations.schema_migrations` history. Version `202611230002` must
+be **unapplied**. If it was applied, stop: editing its source will not replay
+the restriction, and a separately reviewed forward-only recovery is required.
+Verify that migration 001 exists with the reviewed signature, return contract,
+`SECURITY INVOKER` behavior, and function ACL. Inspect actual effective
+`anon`, `PUBLIC`, inherited-role, and `authenticated` privileges; table and
+column grants; RLS policies; exposed views/functions; recipe/taxonomy rows;
+and Admin/Favorites dependencies. Repository SQL is not live-state evidence.
+
+PostgreSQL runtime validation in an isolated environment is mandatory before
+any shared-project execution. Test grant semantics, the preview RPC as `anon`,
+denial of every non-preview recipe column, authenticated details, Admin CMS,
+Favorites, collisions, reruns, and transaction rollback. Coordinate compatible
+frontend activation and removal of protected details from public JavaScript.
+Existing cached bundles and historical deployments require separate handling.
+
+The draft revokes direct `PUBLIC` and `anon` recipe SELECT grants and checks
+effective `anon` column privileges before inserting details. An inherited
+grant that still exposes a protected column causes the transaction to fail.
+Do not repair a failed cutover by restoring anonymous full-detail SELECT;
+repair safe preview access with a separately reviewed forward change. This
+draft does not authorize Production deployment, SQL execution, or changes to
+Supabase settings.

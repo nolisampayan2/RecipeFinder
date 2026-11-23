@@ -94,7 +94,7 @@ for (const field of [
 assert.match(controlSql, /existing_row\.created_by\s+is\s+not\s+null/i);
 assert.match(controlSql, /raise\s+exception\s+'Existing recipe conflicts/i);
 assert.doesNotMatch(controlSql, /\bon\s+conflict\s+do\s+update\b|\bdelete\s+from\b|\btruncate\b/i);
-assert.doesNotMatch(controlSql, /\b(update\s+public\.|alter\s+table|create\s+table|drop\s+table|create\s+policy|alter\s+policy|grant\s+|revoke\s+)\b/i);
+assert.doesNotMatch(controlSql, /\b(update\s+public\.|alter\s+table|create\s+table|drop\s+table|create\s+policy|alter\s+policy)\b/i);
 assert.equal(PRODUCTION_OUTPUT_FILES.length, 51);
 assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 59);
 for (const inventory of [PRODUCTION_OUTPUT_FILES, ADMIN_PREVIEW_OUTPUT_FILES]) {

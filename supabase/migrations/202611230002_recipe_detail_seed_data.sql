@@ -1,7 +1,186 @@
--- Additive, conflict-failing data preparation only. No grants or RLS changes.
--- Static contract tests are not PostgreSQL runtime proof.
+-- Conditional Option B cutover draft. Apply only if version 002 is verified unapplied.
+-- Migration 001, effective role privileges, and the compatible frontend require
+-- separate runtime verification. Never auto-apply this draft to an unknown target.
+-- Restriction and recipe insertion commit together; static tests are not runtime proof.
 begin;
 lock table public.recipes in share row exclusive mode;
+
+do $preflight$
+declare
+  actual_columns text[];
+  field_name text;
+  taxonomy_table text;
+begin
+  if pg_catalog.to_regclass('public.recipes') is null
+    or pg_catalog.to_regclass('public.recipe_categories') is null
+    or pg_catalog.to_regclass('public.cuisines') is null
+    or pg_catalog.to_regclass('public.favorites') is null
+    or pg_catalog.to_regprocedure('public.list_published_recipe_previews_v1(text,text,integer,integer)') is null
+  then
+    raise exception 'Option B schema or preview RPC is unavailable';
+  end if;
+
+  select pg_catalog.array_agg(attribute.attname::text order by attribute.attnum)
+  into actual_columns
+  from pg_catalog.pg_attribute as attribute
+  where attribute.attrelid = 'public.recipes'::pg_catalog.regclass
+    and attribute.attnum > 0
+    and not attribute.attisdropped;
+  if actual_columns is distinct from array[
+    'id', 'name', 'description', 'category_id', 'cuisine_id', 'image_url',
+    'fallback_image_url', 'tutorial_url', 'ingredients', 'instructions',
+    'status', 'source_type', 'external_provider', 'external_id', 'created_by',
+    'published_at', 'created_at', 'updated_at'
+  ]::text[] then
+    raise exception 'Option B recipe schema differs from the reviewed contract';
+  end if;
+
+  if (select count(*) from pg_catalog.pg_class as relation
+      where relation.oid in (
+        'public.recipes'::pg_catalog.regclass,
+        'public.recipe_categories'::pg_catalog.regclass,
+        'public.cuisines'::pg_catalog.regclass,
+        'public.favorites'::pg_catalog.regclass
+      ) and relation.relrowsecurity) <> 4 then
+    raise exception 'Required recipe, taxonomy, or favorites RLS is disabled';
+  end if;
+  if (select count(*) from pg_catalog.pg_policies as policy
+      where policy.schemaname = 'public' and (
+        (policy.tablename = 'recipes' and policy.policyname in (
+          'recipes_read_published', 'recipes_admin_read_all', 'recipes_admin_insert',
+          'recipes_admin_update', 'recipes_admin_delete'
+        )) or (policy.tablename = 'favorites' and policy.policyname in (
+          'favorites_select_own', 'favorites_insert_own', 'favorites_delete_own'
+        ))
+      )) <> 8 then
+    raise exception 'Required recipe or favorites policy names are missing';
+  end if;
+  if exists (
+    select 1 from pg_catalog.pg_proc as procedure
+    where procedure.oid = pg_catalog.to_regprocedure(
+      'public.list_published_recipe_previews_v1(text,text,integer,integer)'
+    ) and procedure.prosecdef
+  ) then
+    raise exception 'Preview RPC must remain SECURITY INVOKER';
+  end if;
+  if pg_catalog.has_schema_privilege('anon', 'public', 'USAGE') is distinct from true
+    or pg_catalog.has_function_privilege(
+      'anon', 'public.list_published_recipe_previews_v1(text,text,integer,integer)', 'EXECUTE'
+    ) is distinct from true then
+    raise exception 'Anonymous preview RPC access is unavailable';
+  end if;
+
+  foreach field_name in array array['SELECT', 'INSERT', 'UPDATE', 'DELETE'] loop
+    if pg_catalog.has_table_privilege('authenticated', 'public.recipes', field_name)
+      is distinct from true then
+      raise exception 'Authenticated recipe privilege % is unavailable', field_name;
+    end if;
+  end loop;
+  foreach field_name in array array['INSERT', 'UPDATE', 'DELETE'] loop
+    if pg_catalog.has_table_privilege('anon', 'public.recipes', field_name) is not false then
+      raise exception 'Unexpected anonymous recipe write privilege %', field_name;
+    end if;
+  end loop;
+  foreach taxonomy_table in array array['public.recipe_categories', 'public.cuisines'] loop
+    foreach field_name in array array['id', 'name', 'is_active'] loop
+      if pg_catalog.has_column_privilege('anon', taxonomy_table, field_name, 'SELECT')
+        is distinct from true then
+        raise exception 'Anonymous preview taxonomy access is unavailable';
+      end if;
+    end loop;
+    foreach field_name in array array['SELECT', 'INSERT', 'UPDATE', 'DELETE'] loop
+      if pg_catalog.has_table_privilege('authenticated', taxonomy_table, field_name)
+        is distinct from true then
+        raise exception 'Authenticated Admin taxonomy privilege % is unavailable', field_name;
+      end if;
+    end loop;
+  end loop;
+  foreach field_name in array array['SELECT', 'INSERT', 'DELETE'] loop
+    if pg_catalog.has_table_privilege('authenticated', 'public.favorites', field_name)
+      is distinct from true then
+      raise exception 'Authenticated favorites privilege % is unavailable', field_name;
+    end if;
+  end loop;
+end;
+$preflight$;
+
+-- Clear direct PUBLIC/anon table and column grants. Inherited grants cannot be
+-- revoked here without changing unrelated roles; the effective check below
+-- aborts this transaction if any such path still exposes a protected column.
+revoke select on table public.recipes from public, anon;
+revoke select (
+  id, name, description, category_id, cuisine_id, image_url,
+  fallback_image_url, tutorial_url, ingredients, instructions, status,
+  source_type, external_provider, external_id, created_by, published_at,
+  created_at, updated_at
+) on table public.recipes from public, anon;
+grant select (
+  id, name, description, category_id, cuisine_id, image_url,
+  fallback_image_url, status, source_type, external_provider, external_id
+) on table public.recipes to anon;
+
+do $verify_restriction$
+declare
+  field_name text;
+  taxonomy_table text;
+begin
+  foreach field_name in array array[
+    'id', 'name', 'description', 'category_id', 'cuisine_id', 'image_url',
+    'fallback_image_url', 'status', 'source_type', 'external_provider', 'external_id'
+  ] loop
+    if pg_catalog.has_column_privilege('anon', 'public.recipes', field_name, 'SELECT')
+      is distinct from true then
+      raise exception 'Anonymous preview column access is unavailable';
+    end if;
+  end loop;
+  foreach field_name in array array[
+    'tutorial_url', 'ingredients', 'instructions', 'created_by',
+    'published_at', 'created_at', 'updated_at'
+  ] loop
+    if pg_catalog.has_column_privilege('anon', 'public.recipes', field_name, 'SELECT')
+      is not false then
+      raise exception 'Anonymous protected recipe column access remains effective';
+    end if;
+  end loop;
+  foreach field_name in array array[
+    'id', 'name', 'description', 'category_id', 'cuisine_id', 'image_url',
+    'fallback_image_url', 'tutorial_url', 'ingredients', 'instructions',
+    'status', 'source_type', 'external_provider', 'external_id', 'created_by',
+    'published_at', 'created_at', 'updated_at'
+  ] loop
+    if pg_catalog.has_column_privilege('authenticated', 'public.recipes', field_name, 'SELECT')
+      is distinct from true then
+      raise exception 'Authenticated recipe detail access is unavailable';
+    end if;
+  end loop;
+  foreach field_name in array array['INSERT', 'UPDATE', 'DELETE'] loop
+    if pg_catalog.has_table_privilege('authenticated', 'public.recipes', field_name)
+      is distinct from true then
+      raise exception 'Authenticated Admin recipe privilege % is unavailable', field_name;
+    end if;
+  end loop;
+  foreach taxonomy_table in array array['public.recipe_categories', 'public.cuisines'] loop
+    foreach field_name in array array['id', 'name', 'is_active'] loop
+      if pg_catalog.has_column_privilege('anon', taxonomy_table, field_name, 'SELECT')
+        is distinct from true then
+        raise exception 'Anonymous preview taxonomy access is unavailable';
+      end if;
+    end loop;
+    foreach field_name in array array['SELECT', 'INSERT', 'UPDATE', 'DELETE'] loop
+      if pg_catalog.has_table_privilege('authenticated', taxonomy_table, field_name)
+        is distinct from true then
+        raise exception 'Authenticated Admin taxonomy privilege % is unavailable', field_name;
+      end if;
+    end loop;
+  end loop;
+  foreach field_name in array array['SELECT', 'INSERT', 'DELETE'] loop
+    if pg_catalog.has_table_privilege('authenticated', 'public.favorites', field_name)
+      is distinct from true then
+      raise exception 'Authenticated favorites privilege % is unavailable', field_name;
+    end if;
+  end loop;
+end;
+$verify_restriction$;
 
 do $migration$
 declare
