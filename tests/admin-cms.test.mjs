@@ -315,6 +315,25 @@ const mobileRecipes = Object.freeze([
 ]);
 const editedRecipeIds = [];
 const mobileEditor = { openEdit(id) { editedRecipeIds.push(id); return Promise.resolve(true); } };
+const transitionRequests = [];
+const mobileTransition = (recipe) => { transitionRequests.push(recipe.id); return Promise.resolve(true); };
+const transitionReady = mobileRecipes.map((recipe) => Object.freeze({
+  ...recipe, updatedAt: '2026-11-23T00:00:00.000Z',
+}));
+assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.READY, recipes: transitionReady },
+  fakeDocument, '', 'all', mobileEditor, true, true, mobileTransition, new Set()), true);
+assert.equal(elements.rows.children[0].children[4].children[1].textContent, 'Publish');
+assert.equal(elements.rows.children[1].children[4].children[1].textContent, 'Unpublish');
+assert.equal(elements.rows.children[0].children[4].children[1].disabled, false);
+assert.equal(elements.rows.children[1].children[4].children[1].disabled, false);
+assert.equal(elements.rows.children[2].children[4].children.length, 1, 'Non-CMS rows have no status action');
+elements.rows.children[0].children[4].children[1].emit('click');
+assert.deepEqual(transitionRequests, ['cms:mobile-draft']);
+assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.READY, recipes: transitionReady },
+  fakeDocument, '', 'all', mobileEditor, true, true, mobileTransition,
+  new Set(['cms:mobile-draft'])), true);
+assert.equal(elements.rows.children[0].children[4].children[0].disabled, true);
+assert.equal(elements.rows.children[0].children[4].children[1].disabled, true);
 assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.READY, recipes: mobileRecipes }, fakeDocument, '', 'all', mobileEditor), true);
 assert.equal(elements.rows.children.length, 3);
 assert.equal(elements.rows.children[0].children[0].textContent, longName, 'Long names remain complete text content');
@@ -912,6 +931,9 @@ let integrationAccessCheckCalls = 0;
 const integrationHeldRoleChecks = [];
 let integrationCreateCalls = 0;
 let integrationEditCalls = 0;
+let integrationStatusCalls = 0;
+let integrationConfirm = true;
+let integrationStatusDeferred = null;
 let integrationLoads = 0;
 let integrationExpiresAt = Math.floor(Date.now() / 1000) + 60;
 let integrationTick;
@@ -932,6 +954,7 @@ const advanceIntegrationClock = async (milliseconds) => {
 const integrationRows = [Object.freeze({
   id: 'cms:11111111-2222-4333-8444-555555555555', name: 'Existing Draft',
   category: 'Dinner', cuisine: 'Filipino', status: 'draft', sourceType: 'cms',
+  updatedAt: '2026-11-23T00:00:00.000Z',
 })];
 const integrationClient = { auth: { async getSession() {
   integrationSessionCalls += 1;
@@ -955,6 +978,7 @@ const integrationPage = createAdminPageActivation({
     clearTimeout(id) { integrationTimers.delete(id); },
   },
   now: () => integrationNow,
+  confirmStatusChange: () => integrationConfirm,
   loadConfig: async () => ({ SUPABASE_CONFIG: { fictional: true } }),
   createClientOwner: () => ({ initialize: () => integrationClient }),
   createDrawer: () => ({ close() {}, cleanup() {} }),
@@ -989,6 +1013,16 @@ const integrationPage = createAdminPageActivation({
   createMutationService: () => ({
     async createDraft() { integrationCreateCalls += 1; return { status: 'success', data: { id: integrationRows[0].id, updatedAt: '2026-11-23T00:00:00.000Z' } }; },
     async editDraft() { integrationEditCalls += 1; return { status: 'success', data: { id: integrationRows[0].id, updatedAt: '2026-11-23T00:00:00.000Z' } }; },
+    async transitionStatus(context) {
+      integrationStatusCalls += 1;
+      assert.equal(context.recipeId, integrationRows[0].id);
+      assert.equal(context.expectedStatus, integrationRows[0].status);
+      assert.equal(context.expectedUpdatedAt, integrationRows[0].updatedAt);
+      if (integrationStatusDeferred) return integrationStatusDeferred.promise;
+      integrationRows[0] = Object.freeze({ ...integrationRows[0], status: context.desiredStatus,
+        updatedAt: '2026-11-23T00:01:00.000Z' });
+      return { status: 'success', data: { id: context.recipeId, status: context.desiredStatus } };
+    },
     invalidate() {}, cleanup() {},
   }),
   createTaxonomySource: () => ({
@@ -1026,6 +1060,90 @@ assert.equal(integrationMap.get('[data-editor-field="name"]').value, 'Unsaved sa
 assert.equal(await integrationMap.get('[data-admin-editor-form]').emit('submit', { preventDefault() {} }), true);
 assert.equal(integrationEditCalls, 1, 'Authorized Edit reaches the real editor mutation path');
 await new Promise((resolve) => setImmediate(resolve));
+integrationConfirm = false;
+integrationMap.get('[data-admin-rows]').children[0].children[4].children[1].emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationStatusCalls, 0, 'Canceled confirmation cannot mutate');
+integrationConfirm = true;
+integrationMap.get('[data-admin-rows]').children[0].children[4].children[1].emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationStatusCalls, 1, 'Freshly authorized publication reaches the status service');
+assert.equal(integrationRows[0].status, 'published');
+assert.equal(integrationMap.get('[data-admin-rows]').children[0].children[4].children[1].textContent,
+  'Unpublish');
+integrationMap.get('[data-admin-rows]').children[0].children[4].children[1].emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationStatusCalls, 2);
+assert.equal(integrationRows[0].status, 'draft');
+assert.equal(integrationMap.get('[data-admin-rows]').children[0].children[4].children[1].textContent,
+  'Publish');
+integrationStatusDeferred = deferred();
+const delayedPublishButton = integrationMap.get('[data-admin-rows]').children[0].children[4].children[1];
+delayedPublishButton.emit('click');
+delayedPublishButton.emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationStatusCalls, 3, 'Duplicate clicks start only one status mutation');
+assert.equal(integrationMap.get('[data-admin-rows]').children[0].children[4].children[1].disabled, true,
+  'Pending status action is disabled');
+const loadsBeforeConflict = integrationLoads;
+integrationStatusDeferred.resolve({ status: 'conflict', data: null });
+integrationStatusDeferred = null;
+await new Promise((resolve) => setImmediate(resolve));
+assert.ok(integrationLoads > loadsBeforeConflict, 'Conflict refreshes the authorized Admin catalog');
+integrationStatusDeferred = deferred();
+integrationMap.get('[data-admin-rows]').children[0].children[4].children[1].emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationStatusCalls, 4);
+const loadsBeforeLogout = integrationLoads;
+integrationSessionListener({ status: 'guest', user: null });
+integrationStatusDeferred.resolve({ status: 'success', data: { id: integrationRows[0].id } });
+integrationStatusDeferred = null;
+await new Promise((resolve) => setImmediate(resolve));
+assert.notEqual(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY,
+  'Logout cannot be reversed by a late status result');
+assert.equal(integrationLoads, loadsBeforeLogout, 'Late status success cannot refresh another session');
+integrationSessionListener({ status: 'authenticated', user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY);
+integrationStatusDeferred = deferred();
+integrationMap.get('[data-admin-rows]').children[0].children[4].children[1].emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationStatusCalls, 5);
+const loadsBeforeSwitch = integrationLoads;
+integrationSessionListener({ status: 'authenticated', user: { id: USER_B } });
+integrationStatusDeferred.resolve({ status: 'success', data: { id: integrationRows[0].id } });
+integrationStatusDeferred = null;
+await new Promise((resolve) => setImmediate(resolve));
+assert.notEqual(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY,
+  'An old account status result cannot restore access after switching accounts');
+assert.equal(integrationLoads, loadsBeforeSwitch, 'Old account status result cannot refresh new account');
+integrationSessionListener({ status: 'authenticated', user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY);
+integrationStatusDeferred = deferred();
+integrationMap.get('[data-admin-rows]').children[0].children[4].children[1].emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationStatusCalls, 6);
+const loadsBeforeLateError = integrationLoads;
+integrationSessionListener({ status: 'authenticated', user: { id: USER_B } });
+integrationStatusDeferred.reject(new Error('PRIVATE_LATE_STATUS_ERROR'));
+integrationStatusDeferred = null;
+await new Promise((resolve) => setImmediate(resolve));
+assert.notEqual(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY);
+assert.equal(integrationLoads, loadsBeforeLateError);
+assert.doesNotMatch(integrationMap.get('[data-admin-status]').textContent, /PRIVATE_LATE_STATUS_ERROR/);
+integrationSessionListener({ status: 'authenticated', user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY);
+integrationExpiresAt = Math.floor(integrationNow / 1000) - 1;
+integrationMap.get('[data-admin-rows]').children[0].children[4].children[1].emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationStatusCalls, 6, 'Expired session cannot start a status mutation');
+assert.notEqual(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY);
+integrationExpiresAt = Math.floor(integrationNow / 1000) + 60;
+integrationSessionListener({ status: 'authenticated', user: { id: USER_A } });
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY);
 integrationMap.get('[data-admin-rows]').children[0].children[4].children[0].emit('click');
 await new Promise((resolve) => setImmediate(resolve));
 integrationExpiresAt = Math.floor(Date.now() / 1000) - 1;
@@ -1260,7 +1378,7 @@ assert.match(css, /\.admin-table-wrap tbody td\.admin-recipe-name\{[^}]*width:10
 assert.match(css, /\.admin-table-wrap tbody td \.status-badge\{justify-self:start\}/);
 assert.match(css, /\.admin-table-wrap \.admin-row-action\{width:100%;min-height:44px\}/);
 const browserSource = await readFile(new URL('../js/admin-browser.js', import.meta.url), 'utf8');
-assert.doesNotMatch(browserSource, /innerHTML|insertAdjacentHTML|document\.write|service_role|\.insert\s*\(|\.update\s*\(|\.delete\s*\(|\.upsert\s*\(/i);
+assert.doesNotMatch(browserSource, /innerHTML|insertAdjacentHTML|document\.write|service_role|(?:table|client|query)\s*\.\s*(?:insert|update|delete|upsert)\s*\(/i);
 assert.match(browserSource, /createSupabaseAdminRecipeMutationService/);
 assert.match(browserSource, /createSupabaseAdminTaxonomySource/);
 

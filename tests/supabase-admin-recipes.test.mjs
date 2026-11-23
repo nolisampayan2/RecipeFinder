@@ -20,6 +20,7 @@ function row(overrides = {}) {
     name: 'Recipe One',
     status: 'draft',
     source_type: 'cms',
+    updated_at: UPDATED_AT,
     category: { name: 'Dinner' },
     cuisine: { name: 'Filipino' },
     ...overrides,
@@ -117,6 +118,7 @@ assert.deepEqual(normalized, {
   cuisine: 'Filipino',
   status: 'draft',
   sourceType: 'cms',
+  updatedAt: UPDATED_AT,
 });
 assert.equal(Object.isFrozen(normalized), true);
 for (const sourceType of ['seed', 'cms', 'external']) {
@@ -126,6 +128,9 @@ for (const sourceType of [undefined, null, '', 'unknown', 'CMS']) {
   assert.throws(() => normalizeAdminRecipeRow(row({ source_type: sourceType })), /source/i);
 }
 assert.match(ADMIN_RECIPE_SELECT, /source_type/, 'Catalog request must include provenance');
+assert.match(ADMIN_RECIPE_SELECT, /updated_at/, 'Catalog must carry an exact optimistic-concurrency token');
+assert.equal(normalizeAdminRecipeRow(row({ updated_at: MICROSECOND_UPDATED_AT })).updatedAt, MICROSECOND_UPDATED_AT);
+assert.throws(() => normalizeAdminRecipeRow(row({ updated_at: 'bad' })), /timestamp/i);
 
 const validFake = fakeClient({
   data: [row(), row({ id: 'cms:recipe-two', name: 'Recipe Two', status: 'published' })],
@@ -154,6 +159,7 @@ for (const response of [
   { data: [row({ id: 'Bad ID' })], error: null },
   { data: [row({ status: 'archived' })], error: null },
   { data: [row({ category: null })], error: null },
+  { data: [row({ updated_at: null })], error: null },
   { data: [row(), row()], error: null },
 ]) {
   const result = await createSupabaseAdminRecipeSource(fakeClient(response).client).listAll();

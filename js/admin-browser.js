@@ -3,7 +3,7 @@ import { createAdminRecipeEditor } from './admin-recipe-editor.js';
 import { createAuthSessionService, isEmailConfirmed } from './auth-session.js';
 import { createSupabaseAdminAccessService } from './supabase-admin-access.js';
 import { createSupabaseAdminRecipeSource } from './supabase-admin-recipes.js';
-import { createSupabaseAdminRecipeMutationService } from './supabase-admin-recipe-mutations.js';
+import { ADMIN_RECIPE_MUTATION_STATUS, createSupabaseAdminRecipeMutationService } from './supabase-admin-recipe-mutations.js';
 import { createSupabaseAdminTaxonomySource } from './supabase-admin-taxonomies.js';
 import { isValidAccountUserId } from './supabase-favorites.js';
 import { createSupabasePageClientOwner } from './supabase-browser.js';
@@ -322,7 +322,9 @@ export function renderAdminCmsState(
   statusFilter = 'all',
   editor = null,
   authenticated = null,
-  taxonomiesReady = Boolean(editor)
+  taxonomiesReady = Boolean(editor),
+  onStatusTransition = null,
+  pendingStatusIds = null
 ) {
   try {
     const status = Object.values(ADMIN_CMS_STATUS).includes(state?.status)
@@ -386,12 +388,25 @@ export function renderAdminCmsState(
         edit.type = 'button';
         edit.className = 'admin-row-action';
         edit.textContent = 'Edit draft';
-        const editable = Boolean(editor && taxonomiesReady && recipe.status === 'draft'
+        const pending = pendingStatusIds?.has?.(recipe.id) === true;
+        const editable = Boolean(editor && taxonomiesReady && !pending && recipe.status === 'draft'
           && recipe.sourceType === 'cms');
         edit.disabled = !editable;
         edit.setAttribute('aria-label', editable ? `Edit ${recipe.name}` : `${recipe.name} is read only`);
         if (editable) edit.addEventListener('click', () => { void editor.openEdit(recipe.id); });
         actionCell.append(edit);
+        if (recipe.sourceType === 'cms' && ['draft', 'published'].includes(recipe.status)) {
+          const transition = documentLike.createElement('button');
+          transition.type = 'button';
+          transition.className = 'admin-row-action';
+          transition.textContent = recipe.status === 'draft' ? 'Publish' : 'Unpublish';
+          transition.disabled = pending || typeof onStatusTransition !== 'function'
+            || typeof recipe.updatedAt !== 'string';
+          transition.setAttribute('aria-disabled', String(transition.disabled));
+          transition.setAttribute('aria-label', `${transition.textContent} ${recipe.name}`);
+          if (!transition.disabled) transition.addEventListener('click', () => { void onStatusTransition(recipe); });
+          actionCell.append(transition);
+        }
         row.append(actionCell);
         elements.rows.append(row);
       }
@@ -433,6 +448,7 @@ export function createAdminPageActivation(options = {}) {
   let adminAccess;
   let coordinator;
   let editor;
+  let mutationService;
   let unsubscribeSession;
   let unsubscribeCoordinator;
   let activationPromise;
@@ -445,6 +461,9 @@ export function createAdminPageActivation(options = {}) {
   let taxonomiesChecked = false;
   let taxonomyGeneration = 0;
   let savedNotice = false;
+  let statusNotice = '';
+  let statusActionGeneration = 0;
+  const pendingStatusIds = new Set();
   let sessionGeneration = 0;
   let expiryMonitor = null;
   let monitorRequest = null;
@@ -536,6 +555,10 @@ export function createAdminPageActivation(options = {}) {
   };
 
   const lockAdmin = () => {
+    statusActionGeneration += 1;
+    pendingStatusIds.clear();
+    statusNotice = '';
+    try { mutationService?.invalidate?.(); } catch { /* Stale mutation responses remain ignored by the page. */ }
     sessionGeneration += 1;
     monitorEpoch += 1;
     currentUserId = null;
@@ -634,7 +657,9 @@ export function createAdminPageActivation(options = {}) {
       elements.statusFilter.value,
       editor,
       currentUserId === null ? false : true,
-      taxonomiesReady
+      taxonomiesReady,
+      handleStatusTransition,
+      pendingStatusIds
     );
     if (rendered && state.status === ADMIN_CMS_STATUS.READY && editor && !taxonomiesReady) {
       const explanation = taxonomiesChecked
@@ -646,6 +671,10 @@ export function createAdminPageActivation(options = {}) {
       elements.status.textContent = 'Draft saved. Recipe catalog ready.';
     } else if (rendered && savedNotice && state.status === ADMIN_CMS_STATUS.ERROR) {
       elements.status.textContent = 'Draft saved, but the catalog could not be refreshed.';
+    } else if (rendered && statusNotice && state.status === ADMIN_CMS_STATUS.READY) {
+      elements.status.textContent = statusNotice;
+    } else if (rendered && statusNotice && state.status === ADMIN_CMS_STATUS.ERROR) {
+      elements.status.textContent = `${statusNotice} Catalog refresh is unavailable.`;
     }
     return rendered;
   };
@@ -654,6 +683,67 @@ export function createAdminPageActivation(options = {}) {
   const onCreate = () => {
     if (editor && taxonomiesReady && coordinator?.getState().status === ADMIN_CMS_STATUS.READY) {
       void editor.openCreate();
+    }
+  };
+  const handleStatusTransition = async (recipe) => {
+    const accountId = currentUserId;
+    const actionGeneration = statusActionGeneration;
+    const currentRow = () => coordinator?.getState().recipes?.find?.((item) => item.id === recipe.id);
+    const stillCurrent = () => !retired && actionGeneration === statusActionGeneration
+      && currentUserId === accountId && coordinator?.getState().status === ADMIN_CMS_STATUS.READY;
+    if (!stillCurrent() || !isValidAccountUserId(accountId) || !mutationService
+      || typeof mutationService.transitionStatus !== 'function' || pendingStatusIds.has(recipe.id)
+      || editor?.isDirty?.() === true || editor?.isPending?.() === true
+      || recipe.sourceType !== 'cms' || !['draft', 'published'].includes(recipe.status)
+      || typeof recipe.updatedAt !== 'string') return false;
+    const row = currentRow();
+    if (row?.status !== recipe.status || row?.sourceType !== 'cms'
+      || row?.updatedAt !== recipe.updatedAt) return false;
+    pendingStatusIds.add(recipe.id);
+    savedNotice = false;
+    render(coordinator.getState());
+    try {
+      const publishing = recipe.status === 'draft';
+      const confirm = options.confirmStatusChange ?? windowLike?.confirm?.bind(windowLike);
+      if (typeof confirm !== 'function') return false;
+      const question = publishing
+        ? `Publish ${recipe.name}? This makes the full recipe publicly accessible under current database permissions.`
+        : `Unpublish ${recipe.name}? This removes the recipe from the public catalog and may hide saved favorites.`;
+      if (await confirm(question) !== true || !stillCurrent()) return false;
+      if (!await authorizeAction(accountId) || !stillCurrent()) return false;
+      const refreshedRow = currentRow();
+      if (refreshedRow?.status !== recipe.status || refreshedRow?.sourceType !== 'cms'
+        || refreshedRow?.updatedAt !== recipe.updatedAt) return false;
+      const result = await mutationService.transitionStatus({
+        recipeId: recipe.id,
+        expectedStatus: recipe.status,
+        expectedUpdatedAt: recipe.updatedAt,
+        desiredStatus: publishing ? 'published' : 'draft',
+      });
+      if (!stillCurrent()) return false;
+      if (result?.status === ADMIN_RECIPE_MUTATION_STATUS.DENIED) {
+        lockAdmin();
+        return false;
+      }
+      if (result?.status === ADMIN_RECIPE_MUTATION_STATUS.SUCCESS) {
+        statusNotice = publishing ? 'Recipe published.' : 'Recipe unpublished.';
+        const refreshed = await coordinator.refreshRecipes();
+        if (stillCurrent() && !refreshed) statusNotice += ' Catalog refresh is unavailable.';
+        return refreshed === true && stillCurrent();
+      }
+      statusNotice = result?.status === ADMIN_RECIPE_MUTATION_STATUS.CONFLICT
+        ? 'Recipe changed. Refreshing the catalog.'
+        : 'Recipe status could not be confirmed. Reload before trying again.';
+      if (result?.status === ADMIN_RECIPE_MUTATION_STATUS.CONFLICT) {
+        await coordinator.refreshRecipes();
+      }
+      return false;
+    } catch {
+      if (stillCurrent()) statusNotice = 'Recipe status could not be confirmed. Reload before trying again.';
+      return false;
+    } finally {
+      if (actionGeneration === statusActionGeneration) pendingStatusIds.delete(recipe.id);
+      if (stillCurrent()) render(coordinator.getState());
     }
   };
   const checkTaxonomies = (userId) => {
@@ -708,7 +798,7 @@ export function createAdminPageActivation(options = {}) {
           });
           coordinator = createCoordinator({ adminAccess: boundedAdminAccess, recipeSource });
           if (typeof createMutationService === 'function' && typeof createTaxonomySource === 'function') {
-            const mutationService = createMutationService(client);
+            mutationService = createMutationService(client);
             taxonomySource = createTaxonomySource(client);
             editor = createEditor({
               elements: editorElements(elements.root),
@@ -746,6 +836,10 @@ export function createAdminPageActivation(options = {}) {
           });
           unsubscribeSession = sessionService.subscribe((state) => {
             sessionGeneration += 1;
+            statusActionGeneration += 1;
+            pendingStatusIds.clear();
+            statusNotice = '';
+            try { mutationService?.invalidate?.(); } catch { /* Stale responses remain ignored. */ }
             monitorEpoch += 1;
             monitorRequest = null;
             monitorSkippedTicks = 0;
@@ -801,6 +895,10 @@ export function createAdminPageActivation(options = {}) {
     cleanup() {
       if (retired) return false;
       retired = true;
+      statusActionGeneration += 1;
+      pendingStatusIds.clear();
+      statusNotice = '';
+      try { mutationService?.cleanup?.(); } catch { /* Page retirement remains terminal. */ }
       for (const lease of [...checkLeases]) lease.retire(null);
       try { documentLike?.removeEventListener?.('visibilitychange', onPageResume); } catch { /* Page retirement remains terminal. */ }
       try { windowLike?.removeEventListener?.('focus', onPageResume); } catch { /* Page retirement remains terminal. */ }

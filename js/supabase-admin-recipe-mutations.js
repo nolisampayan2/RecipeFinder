@@ -9,6 +9,7 @@ const USER_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 const CONCURRENCY_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
 const CREATE_CONTEXT_FIELDS = Object.freeze(['recipeId', 'creatorUserId']);
 const EDIT_CONTEXT_FIELDS = Object.freeze(['recipeId', 'creatorUserId', 'expectedUpdatedAt']);
+const STATUS_CONTEXT_FIELDS = Object.freeze(['recipeId', 'expectedStatus', 'expectedUpdatedAt', 'desiredStatus']);
 
 export const ADMIN_RECIPE_MUTATION_SELECT = [
   'id',
@@ -16,6 +17,10 @@ export const ADMIN_RECIPE_MUTATION_SELECT = [
   'source_type',
   'created_by',
   'updated_at',
+].join(',');
+
+export const ADMIN_RECIPE_STATUS_MUTATION_SELECT = [
+  'id', 'status', 'source_type', 'published_at', 'updated_at',
 ].join(',');
 
 export const ADMIN_RECIPE_MUTATION_STATUS = Object.freeze({
@@ -255,6 +260,41 @@ function successResult(data) {
   return Object.freeze({ status: ADMIN_RECIPE_MUTATION_STATUS.SUCCESS, data, error: null });
 }
 
+function normalizedStatusContext(rawContext) {
+  const context = snapshotContext(rawContext, STATUS_CONTEXT_FIELDS);
+  if (typeof context.recipeId !== 'string' || !RECIPE_ID.test(context.recipeId)
+    || context.recipeId.startsWith('external:')) throw new TypeError('Invalid recipe ID.');
+  if (!(
+    (context.expectedStatus === ADMIN_RECIPE_STATUS.DRAFT && context.desiredStatus === ADMIN_RECIPE_STATUS.PUBLISHED)
+    || (context.expectedStatus === ADMIN_RECIPE_STATUS.PUBLISHED && context.desiredStatus === ADMIN_RECIPE_STATUS.DRAFT)
+  )) throw new TypeError('Invalid recipe transition.');
+  return Object.freeze({
+    recipeId: context.recipeId,
+    expectedStatus: context.expectedStatus,
+    expectedUpdatedAt: normalizeTimestamp(context.expectedUpdatedAt),
+    desiredStatus: context.desiredStatus,
+  });
+}
+
+function normalizeStatusMutationRow(row, context) {
+  if (!isRecord(row)) throw new TypeError('Invalid status mutation row.');
+  for (const field of ['id', 'status', 'source_type', 'published_at', 'updated_at']) {
+    if (!hasOwn(row, field)) throw new TypeError('Incomplete status mutation row.');
+  }
+  const { id, status, source_type: sourceType, published_at: publishedAt, updated_at: updatedAt } = row;
+  if (id !== context.recipeId || sourceType !== 'cms' || status !== context.desiredStatus) {
+    throw new TypeError('Unexpected recipe state.');
+  }
+  if ((status === ADMIN_RECIPE_STATUS.DRAFT && publishedAt !== null)
+    || (status === ADMIN_RECIPE_STATUS.PUBLISHED && typeof publishedAt !== 'string')) {
+    throw new TypeError('Unexpected publication state.');
+  }
+  if (publishedAt !== null) normalizeTimestamp(publishedAt);
+  return Object.freeze({
+    id, status, sourceType, publishedAt, updatedAt: normalizeTimestamp(updatedAt),
+  });
+}
+
 export function createSupabaseAdminRecipeMutationService(client) {
   const from = requireClient(client);
   let generation = 0;
@@ -266,7 +306,9 @@ export function createSupabaseAdminRecipeMutationService(client) {
     if (pending.has(recipeId)) return pending.get(recipeId);
     const operationGeneration = generation;
     const attempt = Promise.resolve()
-      .then(operation)
+      .then(() => (
+        retired || generation !== operationGeneration ? FIXED_RESULTS.STALE : operation()
+      ))
       .catch(() => FIXED_RESULTS.UNCERTAIN)
       .then((result) => (
         retired || generation !== operationGeneration ? FIXED_RESULTS.STALE : result
@@ -349,6 +391,46 @@ export function createSupabaseAdminRecipeMutationService(client) {
         try {
           return successResult(normalizeMutationRow(response.data[0], normalized.id));
         } catch {
+          return FIXED_RESULTS.UNCERTAIN;
+        }
+      });
+    },
+
+    transitionStatus(rawContext) {
+      let context;
+      try { context = normalizedStatusContext(rawContext); } catch { return Promise.resolve(FIXED_RESULTS.INVALID); }
+      if (pending.has(context.recipeId)) return Promise.resolve(FIXED_RESULTS.CONFLICT);
+      return runOwned(context.recipeId, async () => {
+        let response;
+        try {
+          const table = from.call(client, 'recipes');
+          if (!isRecord(table) || typeof table.update !== 'function') return FIXED_RESULTS.UNCERTAIN;
+          const publishedAt = context.desiredStatus === ADMIN_RECIPE_STATUS.PUBLISHED
+            ? new Date().toISOString() : null;
+          const updated = table.update(Object.freeze({
+            status: context.desiredStatus, published_at: publishedAt,
+          }));
+          if (!isRecord(updated) || typeof updated.eq !== 'function') return FIXED_RESULTS.UNCERTAIN;
+          const byId = updated.eq('id', context.recipeId);
+          if (!isRecord(byId) || typeof byId.eq !== 'function') return FIXED_RESULTS.UNCERTAIN;
+          const byTimestamp = byId.eq('updated_at', context.expectedUpdatedAt);
+          if (!isRecord(byTimestamp) || typeof byTimestamp.eq !== 'function') return FIXED_RESULTS.UNCERTAIN;
+          const byStatus = byTimestamp.eq('status', context.expectedStatus);
+          if (!isRecord(byStatus) || typeof byStatus.eq !== 'function') return FIXED_RESULTS.UNCERTAIN;
+          const bySource = byStatus.eq('source_type', 'cms');
+          if (!isRecord(bySource) || typeof bySource.select !== 'function') return FIXED_RESULTS.UNCERTAIN;
+          response = await bySource.select(ADMIN_RECIPE_STATUS_MUTATION_SELECT);
+        } catch {
+          return FIXED_RESULTS.UNCERTAIN;
+        }
+        if (!isExplicitResponse(response)) return FIXED_RESULTS.UNCERTAIN;
+        if (response.error !== null) {
+          return isAuthorizationError(response.error) ? FIXED_RESULTS.DENIED : FIXED_RESULTS.UNCERTAIN;
+        }
+        if (!Array.isArray(response.data)) return FIXED_RESULTS.UNCERTAIN;
+        if (response.data.length === 0) return FIXED_RESULTS.CONFLICT;
+        if (response.data.length !== 1 || !hasOwn(response.data, 0)) return FIXED_RESULTS.UNCERTAIN;
+        try { return successResult(normalizeStatusMutationRow(response.data[0], context)); } catch {
           return FIXED_RESULTS.UNCERTAIN;
         }
       });

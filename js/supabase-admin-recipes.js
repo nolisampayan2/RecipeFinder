@@ -13,6 +13,7 @@ export const ADMIN_RECIPE_SELECT = [
   'name',
   'status',
   'source_type',
+  'updated_at',
   'category:recipe_categories!inner(name)',
   'cuisine:cuisines!inner(name)',
 ].join(',');
@@ -191,7 +192,7 @@ function mapDense(value, mapper) {
 
 export function normalizeAdminRecipeRow(row) {
   if (!isRecord(row)) throw new TypeError('Recipe row is malformed.');
-  for (const field of ['id', 'name', 'status', 'source_type', 'category', 'cuisine']) {
+  for (const field of ['id', 'name', 'status', 'source_type', 'updated_at', 'category', 'cuisine']) {
     if (!Object.prototype.hasOwnProperty.call(row, field)) throw new TypeError('Recipe row is incomplete.');
   }
   const id = requiredText(row.id);
@@ -205,6 +206,7 @@ export function normalizeAdminRecipeRow(row) {
     cuisine: joinedName(row.cuisine),
     status: row.status,
     sourceType: row.source_type,
+    updatedAt: concurrencyTimestamp(row.updated_at),
   });
 }
 
