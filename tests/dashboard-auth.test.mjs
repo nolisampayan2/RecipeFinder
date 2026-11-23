@@ -1,8 +1,21 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createAuthSessionService } from '../js/auth-session.js';
-import { createDashboardAuthIntegration } from '../js/dashboard-auth.js';
+import { createDashboardAuthIntegration, shouldInitializeAdminDashboardLink } from '../js/dashboard-auth.js';
 import { createDashboardAdminLink } from '../js/dashboard-admin-link.js';
+
+for (const hostname of ['localhost', '127.0.0.1']) {
+  assert.equal(shouldInitializeAdminDashboardLink({ adminLocalDevelopmentAvailable: true }, hostname), true);
+  assert.equal(shouldInitializeAdminDashboardLink({ adminLocalDevelopmentAvailable: false }, hostname), false);
+  assert.equal(shouldInitializeAdminDashboardLink({}, hostname), false);
+}
+for (const hostname of ['example.com', 'admin.localhost', 'localhost.example.com', '127.0.0.2', '', null]) {
+  assert.equal(shouldInitializeAdminDashboardLink({ adminLocalDevelopmentAvailable: true }, hostname), false);
+}
+assert.equal(shouldInitializeAdminDashboardLink({ adminPreviewAvailable: true }, 'example.com'), true);
+assert.equal(shouldInitializeAdminDashboardLink({ adminPreviewAvailable: 'true' }, 'example.com'), false);
+assert.equal(shouldInitializeAdminDashboardLink({ adminLocalDevelopmentAvailable: 'true' }, 'localhost'), false);
+assert.equal(shouldInitializeAdminDashboardLink({ get adminPreviewAvailable() { throw Error('private'); } }, 'localhost'), false);
 
 const confirmedUser = Object.freeze({
   id: '11111111-1111-4111-8111-111111111111',
@@ -141,9 +154,17 @@ const previewHarness = createIntegration(createFakeClient(), createFakeDocument(
   onClientReady(_client, availability) { previewAvailability.push(availability); },
 });
 assert.equal(await previewHarness.integration.activate(), true);
-assert.deepEqual(previewAvailability, [{ adminPreviewAvailable: true }]);
+assert.deepEqual(previewAvailability, [{ adminPreviewAvailable: true, adminLocalDevelopmentAvailable: false }]);
 assert.equal(Object.isFrozen(previewAvailability[0]), true);
 previewHarness.integration.cleanup();
+const localAvailability = [];
+const localHarness = createIntegration(createFakeClient(), createFakeDocument(), {
+  loadConfig: async () => ({ SUPABASE_CONFIG: publicConfig, ADMIN_CMS_LOCAL_DEVELOPMENT_AVAILABLE: true }),
+  onClientReady(_client, availability) { localAvailability.push(availability); },
+});
+assert.equal(await localHarness.integration.activate(), true);
+assert.deepEqual(localAvailability, [{ adminPreviewAvailable: false, adminLocalDevelopmentAvailable: true }]);
+localHarness.integration.cleanup();
 assert.equal(observedAuthStates.every(Object.isFrozen), true);
 assert.doesNotMatch(JSON.stringify(observedAuthStates), /cook@|never-render|access_token|refresh_token/);
 const observedCountBeforeCleanup = observedAuthStates.length;

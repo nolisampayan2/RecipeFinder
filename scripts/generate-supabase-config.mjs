@@ -57,6 +57,7 @@ export function renderPublicSupabaseConfig(config, { adminPreviewAvailable = fal
     `  publishableKey: ${JSON.stringify(validated.publishableKey)},`,
     '});',
     `export const ADMIN_CMS_PREVIEW_AVAILABLE = ${adminPreviewAvailable === true};`,
+    'export const ADMIN_CMS_LOCAL_DEVELOPMENT_AVAILABLE = false;',
     '',
   ].join('\n');
 }

@@ -407,7 +407,8 @@ async function reachableActiveModules(deploymentFileList) {
       if (modulePathFromRoot === 'app.js' && dependencyPath === 'js/dashboard-admin-link.js'
         && !deploymentFiles.has(dependencyPath)) {
         assert.equal(deploymentFiles.has('admin.html'), false);
-        assert.match(source, /if \(!pageRetired && availability\?\.adminPreviewAvailable === true\) \{[\s\S]*?import\('\.\/js\/dashboard-admin-link\.js'\)/);
+        assert.match(source, /import \{ createDashboardAuthIntegration, shouldInitializeAdminDashboardLink \} from '\.\/js\/dashboard-auth\.js'/);
+        assert.match(source, /if \(!pageRetired && shouldInitializeAdminDashboardLink\(availability, globalThis\.location\?\.hostname\)\) \{[\s\S]*?import\('\.\/js\/dashboard-admin-link\.js'\)/);
         continue;
       }
       assert.equal(deploymentFiles.has(dependencyPath), true, `${dependencyPath} must be in a deployment inventory`);

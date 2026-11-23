@@ -20,7 +20,7 @@ import { initializeCategoryCarousel, toggleCategoriesExpansion } from './js/cate
 import { createFictionalExternalRecipeController } from './js/fictional-external-recipe-source.js';
 import { createExternalSourceRegistry } from './js/external-source-registry.js';
 import { createLiveMealDbDashboard } from './js/live-mealdb-dashboard.js';
-import { createDashboardAuthIntegration } from './js/dashboard-auth.js';
+import { createDashboardAuthIntegration, shouldInitializeAdminDashboardLink } from './js/dashboard-auth.js';
 import { createDashboardAccountFavorites } from './js/dashboard-account-favorites.js';
 import { createDashboardRecipeCatalogLoader } from './js/dashboard-recipe-catalog-loader.js';
 
@@ -165,7 +165,7 @@ function applyPrimaryCatalogResult(result) {
 }
 
 function acceptDashboardClient(client, availability) {
-  if (!pageRetired && availability?.adminPreviewAvailable === true) {
+  if (!pageRetired && shouldInitializeAdminDashboardLink(availability, globalThis.location?.hostname)) {
     void import('./js/dashboard-admin-link.js').then(({ createDashboardAdminLink }) => {
       if (pageRetired) return;
       const link = $('[data-admin-dashboard-link]');

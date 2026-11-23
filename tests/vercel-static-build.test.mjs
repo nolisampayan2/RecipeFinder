@@ -134,7 +134,7 @@ async function verifySuccessfulOutput(
       .map((match) => match[1]);
     for (const specifier of imports) {
       if (relativePath === 'app.js' && specifier === './js/dashboard-admin-link.js' && !adminExpected) {
-        assert.match(source, /availability\?\.adminPreviewAvailable === true/);
+        assert.match(source, /shouldInitializeAdminDashboardLink\(availability, globalThis\.location\?\.hostname\)/);
         assert.equal(await exists(resolve(result.outputDirectory, 'js/dashboard-admin-link.js')), false);
         continue;
       }
@@ -145,6 +145,7 @@ async function verifySuccessfulOutput(
   const generated = await realFilesystem.readFile(resolve(result.outputDirectory, 'js/supabase-config.js'), 'utf8');
   assert.match(generated, /synthetic-project\.supabase\.co/);
   assert.match(generated, new RegExp(`ADMIN_CMS_PREVIEW_AVAILABLE = ${adminExpected}`));
+  assert.match(generated, /ADMIN_CMS_LOCAL_DEVELOPMENT_AVAILABLE = false/);
   const index = await realFilesystem.readFile(resolve(result.outputDirectory, 'index.html'), 'utf8');
   assert.match(index, /data-admin-dashboard-link hidden/);
   assert.doesNotMatch(index, /data-admin-dashboard-link[^>]+href=/);

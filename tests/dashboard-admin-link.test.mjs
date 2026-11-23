@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createDashboardAdminLink } from '../js/dashboard-admin-link.js';
+import { shouldInitializeAdminDashboardLink } from '../js/dashboard-auth.js';
 
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
@@ -221,7 +222,37 @@ const auth = (userId) => ({ status: 'authenticated', userId });
 
 const app = await readFile(new URL('../app.js', import.meta.url), 'utf8');
 const index = await readFile(new URL('../index.html', import.meta.url), 'utf8');
-assert.match(app, /availability\?\.adminPreviewAvailable === true/);
+const clientStart = app.indexOf('function acceptDashboardClient(client, availability) {');
+const clientRemainder = app.indexOf('\n  if (pageRetired || recipeCatalogLoader) return false;', clientStart);
+assert.ok(clientStart >= 0 && clientRemainder > clientStart, 'Dashboard client initializer is available');
+const originalPrelude = `${app.slice(clientStart, clientRemainder)}\n}`;
+const instrumentedPrelude = originalPrelude.replace("import('./js/dashboard-admin-link.js')", 'importAdminLink()');
+assert.notEqual(instrumentedPrelude, originalPrelude, 'Actual Admin module import is instrumented');
+function importCount(availability, hostname) {
+  let count = 0;
+  const initialize = Function('shouldInitializeAdminDashboardLink', 'globalThis', 'importAdminLink', `
+    let pageRetired = false;
+    let dashboardAdminLink = null;
+    const latestAuthState = Object.freeze({ status: 'guest', userId: null });
+    const $ = () => ({});
+    ${instrumentedPrelude}
+    return acceptDashboardClient;
+  `)(shouldInitializeAdminDashboardLink, { location: { hostname } }, () => {
+    count += 1;
+    return Promise.resolve({ createDashboardAdminLink: () => ({ handleAuthState() {} }) });
+  });
+  initialize({}, availability);
+  return count;
+}
+assert.equal(importCount({ adminPreviewAvailable: true }, 'example.com'), 1);
+assert.equal(importCount({ adminLocalDevelopmentAvailable: true }, 'localhost'), 1);
+assert.equal(importCount({ adminLocalDevelopmentAvailable: true }, '127.0.0.1'), 1);
+assert.equal(importCount({ adminLocalDevelopmentAvailable: true }, 'admin.localhost'), 0);
+assert.equal(importCount({ adminLocalDevelopmentAvailable: false }, 'localhost'), 0);
+assert.equal(importCount({}, 'localhost'), 0);
+assert.equal(importCount({ adminPreviewAvailable: false, adminLocalDevelopmentAvailable: false }, 'localhost'), 0,
+  'Production config served on localhost cannot import the excluded Admin module');
+assert.match(app, /shouldInitializeAdminDashboardLink\(availability, globalThis\.location\?\.hostname\)/);
 assert.match(app, /dashboardAdminLink\?\.cleanup\(\)/);
 assert.match(index, /data-admin-dashboard-link hidden/);
 assert.doesNotMatch(index, /data-admin-dashboard-link[^>]+href=/);

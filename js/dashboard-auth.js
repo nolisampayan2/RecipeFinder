@@ -91,6 +91,16 @@ async function loadLocalPublicConfig() {
   return import('./supabase-config.js');
 }
 
+export function shouldInitializeAdminDashboardLink(availability, hostname) {
+  try {
+    return availability?.adminPreviewAvailable === true
+      || (availability?.adminLocalDevelopmentAvailable === true
+        && (hostname === 'localhost' || hostname === '127.0.0.1'));
+  } catch {
+    return false;
+  }
+}
+
 /** Owns one dashboard Auth lifecycle; recipe discovery remains independent. */
 export function createDashboardAuthIntegration(options = {}) {
   let documentLike;
@@ -222,6 +232,7 @@ export function createDashboardAuthIntegration(options = {}) {
               try {
                 onClientReady(client, Object.freeze({
                   adminPreviewAvailable: configModule?.ADMIN_CMS_PREVIEW_AVAILABLE === true,
+                  adminLocalDevelopmentAvailable: configModule?.ADMIN_CMS_LOCAL_DEVELOPMENT_AVAILABLE === true,
                 }));
               } catch { /* Additive consumers cannot break Auth. */ }
             }
