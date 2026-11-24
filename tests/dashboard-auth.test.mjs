@@ -21,6 +21,7 @@ const confirmedUser = Object.freeze({
   id: '11111111-1111-4111-8111-111111111111',
   email: 'cook@example.test',
   email_confirmed_at: '2026-11-01T00:00:00Z',
+  user_metadata: Object.freeze({ display_name: '  Admin Cook  ' }),
 });
 const VALID_EXPIRY_SECONDS = 4102444800;
 
@@ -270,9 +271,74 @@ assert.equal(confirmedHarness.ui.root.attributes.get('aria-busy'), 'true');
 restoration.resolve({ data: { session: sessionFor() }, error: null });
 assert.equal(await confirmedActivation, true);
 assert.equal(confirmedHarness.ui.root.dataset.authState, 'authenticated');
-assert.equal(confirmedHarness.ui.identity.textContent, confirmedUser.email);
+assert.equal(confirmedHarness.ui.identity.textContent, 'Admin Cook');
+assert.equal(confirmedHarness.ui.label.textContent, 'Signed in');
 assert.equal(confirmedHarness.ui.logout.hidden, false);
 assert.doesNotMatch(confirmedHarness.ui.identity.textContent, /never-render|access_token|refresh_token/);
+
+const regularUser = {
+  ...confirmedUser,
+  id: '22222222-2222-4222-8222-222222222222',
+  email: 'regular@example.test',
+  user_metadata: { display_name: 'Regular Cook' },
+};
+const switchingFake = createFakeClient({ session: sessionFor(confirmedUser) });
+const switchingHarness = createIntegration(switchingFake);
+assert.equal(await switchingHarness.integration.activate(), true);
+assert.equal(switchingHarness.ui.identity.textContent, 'Admin Cook');
+switchingFake.emit('SIGNED_IN', sessionFor(regularUser));
+assert.equal(switchingHarness.ui.identity.textContent, 'Regular Cook');
+switchingFake.emit('SIGNED_OUT', null);
+assert.equal(switchingHarness.ui.identity.textContent, 'Guest');
+switchingFake.emit('SIGNED_IN', sessionFor({ ...regularUser, user_metadata: {} }));
+assert.equal(switchingHarness.ui.identity.textContent, 'Signed-in user');
+assert.notEqual(switchingHarness.ui.identity.textContent, regularUser.email);
+switchingFake.emit('SIGNED_IN', sessionFor({ ...regularUser, user_metadata: { display_name: '<b>Cook</b>' } }));
+assert.equal(switchingHarness.ui.identity.textContent, '<b>Cook</b>', 'HTML-like names remain plain text');
+switchingFake.emit('SIGNED_IN', sessionFor({ ...regularUser, user_metadata: { display_name: 'x'.repeat(80) } }));
+assert.equal(switchingHarness.ui.identity.textContent, 'x'.repeat(80));
+switchingFake.emit('SIGNED_IN', sessionFor({ ...regularUser, user_metadata: { display_name: 'x'.repeat(81) } }));
+assert.equal(switchingHarness.ui.identity.textContent, 'Signed-in user');
+for (const name of ['Juan Dela Cruz', 'María de la Cruz', 'Zoë Łukasz', 'می\u200cنا', 'क\u200dष']) {
+  switchingFake.emit('SIGNED_IN', sessionFor({ ...regularUser, user_metadata: { display_name: name } }));
+  assert.equal(switchingHarness.ui.identity.textContent, name);
+}
+for (const codePoint of [0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069]) {
+  switchingFake.emit('SIGNED_IN', sessionFor({
+    ...regularUser,
+    user_metadata: { display_name: `Alice${String.fromCodePoint(codePoint)}Admin` },
+  }));
+  assert.equal(switchingHarness.ui.identity.textContent, 'Signed-in user');
+  assert.notEqual(switchingHarness.ui.identity.textContent, regularUser.email);
+}
+switchingHarness.integration.cleanup();
+
+const unvalidatedName = `Alice${String.fromCodePoint(0x202e)}Admin`;
+const defensiveUi = createFakeDocument();
+const defensiveHarness = createIntegration(createFakeClient(), defensiveUi, {
+  createSessionService() {
+    const state = { status: 'authenticated', user: { id: regularUser.id, email: regularUser.email, displayName: unvalidatedName } };
+    return {
+      subscribe(listener) { listener(state); return () => true; },
+      async bootstrap() { return state; },
+      async logout() { return { status: 'guest', user: null }; },
+      cleanup() { return true; },
+    };
+  },
+});
+assert.equal(await defensiveHarness.integration.activate(), true);
+assert.equal(defensiveUi.identity.textContent, 'Signed-in user', 'Renderer must independently reject directional controls');
+assert.notEqual(defensiveUi.identity.textContent, regularUser.email);
+defensiveHarness.integration.cleanup();
+
+for (const displayName of ['', ' \u00a0 ', 42, 'Bad\nName']) {
+  const fake = createFakeClient({ session: sessionFor({ ...regularUser, user_metadata: { display_name: displayName } }) });
+  const harness = createIntegration(fake);
+  assert.equal(await harness.integration.activate(), true);
+  assert.equal(harness.ui.identity.textContent, 'Signed-in user');
+  assert.notEqual(harness.ui.identity.textContent, regularUser.email);
+  harness.integration.cleanup();
+}
 
 confirmed.emit('SIGNED_OUT', null);
 assert.equal(confirmedHarness.ui.root.dataset.authState, 'guest');
@@ -294,10 +360,10 @@ const duplicateDashboardLogout = dashboardLogoutHarness.integration.logout();
 assert.equal(duplicateDashboardLogout, dashboardLogout);
 assert.equal(dashboardLogoutHarness.ui.root.dataset.authState, 'loading');
 assert.equal(dashboardLogoutFake.counts.signOut, 1, 'Logout starts in the same synchronous turn');
-assert.notEqual(dashboardLogoutHarness.ui.identity.textContent, confirmedUser.email);
+assert.notEqual(dashboardLogoutHarness.ui.identity.textContent, 'Admin Cook');
 dashboardLogoutFake.emit('SIGNED_IN', sessionFor());
 assert.equal(dashboardLogoutHarness.ui.root.dataset.authState, 'loading');
-assert.notEqual(dashboardLogoutHarness.ui.identity.textContent, confirmedUser.email);
+assert.notEqual(dashboardLogoutHarness.ui.identity.textContent, 'Admin Cook');
 dashboardLogoutRequest.resolve({ error: null });
 assert.equal(await dashboardLogout, true);
 assert.equal(dashboardLogoutHarness.ui.root.dataset.authState, 'guest');
@@ -373,7 +439,7 @@ assert.equal(expiredHarness.ui.root.dataset.authState, 'error');
 assert.equal(expiredHarness.ui.identity.textContent, 'Account unavailable');
 expired.emit('TOKEN_REFRESHED', sessionFor());
 assert.equal(expiredHarness.ui.root.dataset.authState, 'authenticated');
-assert.equal(expiredHarness.ui.identity.textContent, confirmedUser.email);
+assert.equal(expiredHarness.ui.identity.textContent, 'Admin Cook');
 
 for (const malformedSession of [
   { ...sessionFor(), user: [] },
@@ -396,6 +462,21 @@ ordered.emit('SIGNED_IN', sessionFor());
 staleRestoration.resolve({ data: { session: null }, error: null });
 assert.equal(await orderedActivation, true);
 assert.equal(orderedHarness.ui.root.dataset.authState, 'authenticated', 'A stale restoration must not replace a newer event');
+assert.equal(orderedHarness.ui.identity.textContent, 'Admin Cook');
+
+const staleNameRestore = deferred();
+const staleNameFake = createFakeClient({ getSession: () => staleNameRestore.promise });
+const staleNameHarness = createIntegration(staleNameFake);
+const staleNameActivation = staleNameHarness.integration.activate();
+await Promise.resolve();
+await Promise.resolve();
+staleNameFake.emit('SIGNED_IN', sessionFor(regularUser));
+staleNameRestore.resolve({ data: { session: sessionFor(confirmedUser) }, error: null });
+assert.equal(await staleNameActivation, true);
+assert.equal(staleNameHarness.ui.identity.textContent, 'Regular Cook', 'Stale restoration cannot restore the previous name');
+staleNameFake.emit('SIGNED_OUT', null);
+assert.equal(staleNameHarness.ui.identity.textContent, 'Guest');
+staleNameHarness.integration.cleanup();
 
 const cleanupRestoration = deferred();
 const cleanupFake = createFakeClient({ getSession: () => cleanupRestoration.promise });

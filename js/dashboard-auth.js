@@ -16,14 +16,14 @@ export const DASHBOARD_AUTH_MESSAGE = Object.freeze({
 
 function safeIdentity(user) {
   try {
-    const email = user?.email;
+    const name = user?.displayName;
     if (
-      typeof email === 'string'
-      && email === email.trim()
-      && email.length > 0
-      && email.length <= 254
-      && !/[\u0000-\u001f\u007f]/.test(email)
-    ) return email;
+      typeof name === 'string'
+      && name === name.trim()
+      && name.length > 0
+      && name.length <= 80
+      && !/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(name)
+    ) return name;
   } catch {
     // Hostile or malformed identity data stays private.
   }

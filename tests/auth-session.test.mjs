@@ -10,6 +10,7 @@ const confirmedUser = Object.freeze({
   id: 'confirmed-user',
   email: 'confirmed@example.test',
   email_confirmed_at: '2026-10-29T00:00:00Z',
+  user_metadata: Object.freeze({ display_name: '  Recipe Cook  ' }),
 });
 const legacyConfirmedUser = Object.freeze({
   id: 'legacy-confirmed-user',
@@ -128,9 +129,53 @@ const confirmedFake = createFakeClient({ session: { ...sessionFor(), access_toke
 const confirmedService = createAuthSessionService(confirmedFake.client);
 assert.deepEqual(await confirmedService.bootstrap(), {
   status: AUTH_SESSION_STATUS.AUTHENTICATED,
-  user: { id: confirmedUser.id, email: confirmedUser.email },
+  user: { id: confirmedUser.id, email: confirmedUser.email, displayName: 'Recipe Cook' },
 });
 assert.doesNotMatch(JSON.stringify(confirmedService.getState()), /never-public|access_token|refresh_token/);
+
+for (const [displayName, expected] of [
+  [undefined, ''],
+  ['', ''],
+  [' \u00a0 ', ''],
+  [42, ''],
+  [{ toString() { throw new Error('PRIVATE_COERCION'); } }, ''],
+  ['Bad\nName', ''],
+  ['\u0000Name', ''],
+  ['\u0085Name', ''],
+  ['Juan Dela Cruz', 'Juan Dela Cruz'],
+  ['María de la Cruz', 'María de la Cruz'],
+  ['Zoë Łukasz', 'Zoë Łukasz'],
+  ['می\u200cنا', 'می\u200cنا'],
+  ['क\u200dष', 'क\u200dष'],
+  ['x'.repeat(80), 'x'.repeat(80)],
+  ['x'.repeat(81), ''],
+  ['<b>Safe text</b>', '<b>Safe text</b>'],
+]) {
+  const source = { ...confirmedUser, user_metadata: { display_name: displayName } };
+  const service = createAuthSessionService(createFakeClient({ session: sessionFor(source) }).client);
+  const state = await service.bootstrap();
+  assert.equal(state.status, AUTH_SESSION_STATUS.AUTHENTICATED);
+  assert.equal(state.user.displayName, expected);
+  assert.equal(state.user.id, confirmedUser.id);
+  assert.equal(state.user.email, confirmedUser.email);
+  assert.equal(Object.isFrozen(state.user), true);
+}
+for (const codePoint of [0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069]) {
+  const source = { ...confirmedUser, user_metadata: { display_name: `Alice${String.fromCodePoint(codePoint)}Admin` } };
+  const service = createAuthSessionService(createFakeClient({ session: sessionFor(source) }).client);
+  const state = await service.bootstrap();
+  assert.equal(state.status, AUTH_SESSION_STATUS.AUTHENTICATED);
+  assert.equal(state.user.displayName, '', `Directional control U+${codePoint.toString(16)} must be rejected`);
+  assert.equal(state.user.email, confirmedUser.email, 'Internal email remains available');
+}
+for (const metadata of [null, { get display_name() { throw new Error('PRIVATE_NAME_GETTER'); } }]) {
+  const source = { ...confirmedUser, user_metadata: metadata };
+  const service = createAuthSessionService(createFakeClient({ session: sessionFor(source) }).client);
+  const state = await service.bootstrap();
+  assert.equal(state.status, AUTH_SESSION_STATUS.AUTHENTICATED);
+  assert.equal(state.user.displayName, '');
+  assert.doesNotMatch(JSON.stringify(state), /PRIVATE_NAME_GETTER/);
+}
 
 for (const expiresAt of [
   undefined,
@@ -197,7 +242,7 @@ assert.equal((await pendingService.bootstrap()).status, AUTH_SESSION_STATUS.PEND
 pendingFake.emit('USER_UPDATED', { ...sessionFor(), refresh_token: 'never-public-refresh' });
 assert.deepEqual(pendingService.getState(), {
   status: AUTH_SESSION_STATUS.AUTHENTICATED,
-  user: { id: confirmedUser.id, email: confirmedUser.email },
+  user: { id: confirmedUser.id, email: confirmedUser.email, displayName: 'Recipe Cook' },
 });
 pendingFake.emit('SIGNED_OUT', null);
 assert.deepEqual(pendingService.getState(), { status: AUTH_SESSION_STATUS.GUEST, user: null });

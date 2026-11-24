@@ -21,3 +21,24 @@ body.dark{--bg:#14131d;--panel:#1d1b29;--panel-soft:#272433;--text:#f5f3ff;--mut
 @media(max-width:980px){.dashboard-auth{flex:0 1 auto;max-width:205px}.dashboard-auth-copy strong{max-width:100px}}
 @media(max-width:680px){.dashboard-auth-copy small{display:none}.dashboard-auth-copy strong{max-width:78px}}
 @media(max-width:430px){.dashboard-auth{margin-left:auto}.dashboard-auth-copy strong{max-width:105px}}
+@media(max-width:680px){
+  .topbar{flex-wrap:wrap}
+  .theme-toggle{margin-left:auto}
+  .search-tools{order:3;flex:0 0 100%;min-width:0}
+  .dashboard-auth{order:2;flex:0 0 100%;max-width:none;margin-left:0;display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:4px 8px}
+  .dashboard-auth-avatar{grid-column:1;grid-row:1}
+  .dashboard-auth-copy{grid-column:2 / -1;grid-row:1}
+  .dashboard-auth-copy strong{max-width:100%}
+  .dashboard-auth-action{margin-left:0}
+  .dashboard-auth [data-auth-sign-in]{grid-column:3;grid-row:1;min-height:44px;display:inline-flex;align-items:center}
+  .dashboard-auth:has([data-auth-sign-in]:not([hidden])) .dashboard-auth-copy{grid-column:2}
+  .dashboard-auth .dashboard-admin-link{grid-column:1 / 3;grid-row:2;justify-self:start}
+  .dashboard-auth [data-auth-logout]{grid-column:3;grid-row:2;min-height:44px;display:inline-flex;align-items:center;justify-self:end}
+  .dashboard-auth-action[hidden]{display:none}
+}
+@media(min-width:681px) and (max-width:1399px){
+  .topbar{flex-wrap:wrap}
+  .theme-toggle{order:1;margin-left:auto}
+  .dashboard-auth{order:2;min-width:0}
+  .search-tools{order:3;flex:0 0 100%;min-width:0}
+}
