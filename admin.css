@@ -113,6 +113,15 @@
 .ingredient-row .admin-row-action:hover:not(:disabled){border-color:#ff9aa7}
 .admin-ingredients>[data-editor-add-ingredient]{margin-top:2px;border-color:var(--admin-accent);color:var(--auth-text)}
 .admin-form-section textarea[name=instructions]{min-height:190px;line-height:1.65}
+.admin-image-selection{display:grid;gap:12px}
+.admin-image-selection-modes,.admin-image-selection-actions{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+.admin-image-selection-modes label{display:inline-flex;align-items:center;gap:7px;color:var(--auth-text);font-size:13px}
+.admin-image-selection-file{min-width:0}
+.admin-image-selection-preview{display:block;max-width:100%;max-height:240px;object-fit:contain;border-radius:12px}
+.admin-image-selection-preview[hidden],.admin-image-selection-file[hidden],.admin-image-selection>.admin-field[hidden]{display:none}
+.admin-image-selection-name{overflow-wrap:anywhere;color:var(--admin-muted);font-size:12px}
+.admin-image-selection-status{min-height:20px;margin:0;color:var(--admin-muted);font-size:12px}
+.admin-image-selection-status.is-error{color:var(--auth-error)}
 .admin-editor-actions{padding-top:14px;border-top:1px solid var(--admin-line)}
 .admin-editor-actions [data-admin-editor-cancel]{background:transparent}
 @media(max-width:1239px){
