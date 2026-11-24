@@ -133,3 +133,11 @@ body.dark{--sidebar-link:#d5cfee}
   .dashboard-auth:has(.dashboard-admin-link:not([hidden])){max-width:none;display:grid}
   .search-source-panel{grid-row:4}
 }
+
+/* Used only by the separate Option B candidate login dialog. */
+.option-b-login-gate{display:grid;gap:14px}
+.option-b-login-gate h2,.option-b-login-gate p{margin:0}
+.option-b-login-gate>div{display:flex;flex-wrap:wrap;gap:10px}
+.option-b-login-gate a,.option-b-login-gate button{min-height:44px;display:inline-flex;align-items:center;justify-content:center;padding:10px 16px;border-radius:12px;font-weight:700}
+.option-b-login-gate a{background:var(--purple);color:#fff;text-decoration:none}
+.option-b-login-gate button{border:1px solid var(--line);background:var(--panel);color:var(--text)}

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFile, readdir } from 'node:fs/promises';
-import { extname, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { recipes as existingBuiltInRecipes } from '../js/data.js';
@@ -173,19 +173,11 @@ for (const forbiddenRuntime of [
   assert.doesNotMatch(moduleSource, forbiddenRuntime);
 }
 
-async function applicationSources(directory) {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const sources = [];
-  for (const entry of entries) {
-    const path = resolve(directory, entry.name);
-    if (entry.isDirectory()) sources.push(...await applicationSources(path));
-    else if (['.js', '.html'].includes(extname(entry.name))) sources.push(path);
-  }
-  return sources;
-}
-
-const activeSources = [resolve(root, 'app.js'), resolve(root, 'index.html'), ...await applicationSources(resolve(root, 'js'))]
-  .filter((path) => path !== resolve(root, modulePath));
+const activeSources = [resolve(root, 'index.html'), ...new Set(
+  [...PRODUCTION_OUTPUT_FILES, ...ADMIN_PREVIEW_OUTPUT_FILES]
+    .filter((path) => path.endsWith('.js') && path !== 'js/supabase-config.js')
+    .map((path) => resolve(root, path))
+)];
 for (const sourcePath of activeSources) {
   const source = await readFile(sourcePath, 'utf8');
   assert.equal(

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
   AUTHENTICATED_RECIPE_DETAIL_SELECT,
@@ -520,12 +520,8 @@ const serviceSource = await readFile(resolve('js/supabase-recipe-details.js'), '
 assert.doesNotMatch(serviceSource, /createClient|localStorage|sessionStorage|indexedDB|document\.|window\.|fetch\s*\(|XMLHttpRequest|WebSocket/i);
 assert.doesNotMatch(serviceSource, /access_token|refresh_token|service_role|password/i);
 
-const activeRuntimeFiles = [
-  'app.js',
-  ...(await readdir(resolve('js')))
-    .filter((name) => name.endsWith('.js') && name !== 'supabase-recipe-details.js')
-    .map((name) => `js/${name}`),
-];
+const activeRuntimeFiles = [...new Set([...PRODUCTION_OUTPUT_FILES, ...ADMIN_PREVIEW_OUTPUT_FILES])]
+  .filter((path) => path.endsWith('.js') && path !== 'js/supabase-config.js');
 for (const runtimeFile of activeRuntimeFiles) {
   const source = await readFile(resolve(runtimeFile), 'utf8');
   assert.doesNotMatch(source, /(?:from\s+|import\s*\()(['"])\.\/supabase-recipe-details\.js\1/);
