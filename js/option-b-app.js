@@ -10,6 +10,10 @@ import { createDashboardAccountFavorites } from './dashboard-account-favorites.j
 import { createLiveMealDbDashboard } from './live-mealdb-dashboard.js';
 import { initializeCategoryCarousel, toggleCategoriesExpansion } from './category-carousel.js';
 import { safeImageUrl } from './security.js';
+import { createSupabaseRecipeCollectionsService } from './supabase-recipe-collections.js';
+import { createRecipeCollectionsController } from './recipe-collections-controller.js';
+import { createMealDbClient } from './mealdb-client.js';
+import { createMealDbRecipeSource } from './mealdb-recipe-source.js';
 
 // This entry is used only by the explicit candidate build. It is never the
 // current Production or Admin Preview entry point.
@@ -38,6 +42,10 @@ let retired = false;
 const owned = new Map();
 let live = null;
 let guestFavoriteIds = loadGuestFavorites();
+let collectionsController = null;
+let collectionsEpoch = 0;
+let displayedRecipe = null;
+let collectionMealDb = null;
 
 function node(tag, className = '', text = '') {
   const item = document.createElement(tag);
@@ -71,8 +79,117 @@ function setSidebar(open) {
 
 function closeDetail(restoreFocus = true) {
   detailGeneration += 1;
+  displayedRecipe = null;
   modal.close({ restoreFocus });
   previewSession?.dismissDetail();
+}
+
+function installCollectionsPage() {
+  const link = node('a', 'nav-link', 'My Recipe Collections');
+  link.href = '#collections';
+  link.dataset.section = 'collections';
+  $('#main-nav').append(link);
+  const section = node('section', 'content-section option-b-collections');
+  section.id = 'collections';
+  section.hidden = true;
+  section.append(node('h2', '', 'My Recipe Collections'));
+  const status = node('p', 'option-b-collections-status');
+  status.id = 'collections-status';
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+  const content = node('div');
+  content.id = 'collections-content';
+  section.append(status, content);
+  $('#recommended').before(section);
+}
+
+function renderCollections() {
+  const content = $('#collections-content');
+  const status = $('#collections-status');
+  content.replaceChildren();
+  if (authState.status === 'guest') {
+    status.textContent = 'Sign in to create and view your recipe collections.';
+    const links = node('div', 'option-b-collections-actions');
+    const signIn = node('a', 'view-btn', 'Sign In');
+    signIn.href = 'login.html';
+    const register = node('a', 'view-btn', 'Create Account');
+    register.href = 'register.html';
+    links.append(signIn, register);
+    content.append(links);
+    return;
+  }
+  const state = collectionsController?.getState();
+  if (authState.status !== 'authenticated' || !state || state.status === 'loading') {
+    status.textContent = 'Checking your collections…';
+    return;
+  }
+  if (state.status === 'error') {
+    status.textContent = state.message;
+    const retry = node('button', 'view-btn', 'Retry');
+    retry.type = 'button';
+    retry.dataset.collectionRetry = 'true';
+    content.append(retry);
+    return;
+  }
+  status.textContent = state.pending ? 'Saving collection…' : state.message || (state.collections.length
+    ? `${state.collections.length} collections` : 'No collections yet. Create one below.');
+  const create = node('form', 'option-b-collections-form');
+  create.dataset.collectionCreate = 'true';
+  const input = node('input');
+  input.name = 'name';
+  input.required = true;
+  input.maxLength = 80;
+  input.placeholder = 'Collection name';
+  input.setAttribute('aria-label', 'New collection name');
+  const submit = node('button', 'view-btn', 'Create Collection');
+  submit.type = 'submit';
+  submit.disabled = state.pending;
+  create.append(input, submit);
+  content.append(create);
+  for (const collection of state.collections) {
+    const card = node('article', 'option-b-collection-card');
+    card.append(node('h3', '', collection.name));
+    const actions = node('div', 'option-b-collections-actions');
+    const rename = node('form', 'option-b-collections-form');
+    rename.dataset.collectionRename = collection.id;
+    const name = node('input');
+    name.name = 'name';
+    name.value = collection.name;
+    name.required = true;
+    name.maxLength = 80;
+    name.setAttribute('aria-label', `Rename ${collection.name}`);
+    const renameButton = node('button', 'view-btn', 'Rename');
+    renameButton.type = 'submit';
+    renameButton.disabled = state.pending;
+    rename.append(name, renameButton);
+    const remove = node('button', 'view-btn', 'Delete Collection');
+    remove.type = 'button';
+    remove.dataset.collectionDelete = collection.id;
+    remove.disabled = state.pending;
+    actions.append(rename, remove);
+    card.append(actions);
+    if (!collection.items.length) card.append(node('p', '', 'No recipes in this collection yet.'));
+    for (const item of collection.items) {
+      const row = node('div', 'option-b-collection-item');
+      const preview = owned.get(item.recipeId);
+      const isMealDb = item.recipeId.startsWith('external:themealdb:');
+      row.append(node('span', '', preview?.name ?? (isMealDb
+        ? `TheMealDB recipe #${item.recipeId.split(':').at(-1)}` : 'Recipe preview unavailable')));
+      const viewButton = node('button', 'view-btn', 'View Recipe');
+      viewButton.type = 'button';
+      viewButton.dataset.collectionView = item.recipeId;
+      viewButton.disabled = state.pending;
+      const removeItem = node('button', 'view-btn', 'Remove');
+      removeItem.type = 'button';
+      removeItem.dataset.collectionRemove = item.id;
+      removeItem.dataset.collectionId = collection.id;
+      removeItem.setAttribute('aria-label', `Remove recipe from ${collection.name}`);
+      removeItem.disabled = state.pending;
+      row.append(viewButton, removeItem);
+      card.append(row);
+    }
+    content.append(card);
+  }
 }
 
 function currentRecipes() {
@@ -143,6 +260,8 @@ function renderFavorites() {
 }
 
 function render() {
+  $('#collections').hidden = view !== 'collections';
+  $('#recommended').hidden = view === 'collections';
   const recipes = currentRecipes();
   const ids = new Set(favoriteIds());
   const visible = view === 'favorites'
@@ -283,6 +402,12 @@ function handlePrimaryNavigation(section, event) {
     event.preventDefault();
     showSavedRecipes();
     $('#recommended').scrollIntoView();
+  } else if (section === 'collections') {
+    event.preventDefault();
+    view = 'collections';
+    render();
+    renderCollections();
+    $('#collections').scrollIntoView();
   } else if (['home', 'recommended', 'categories', 'cuisines'].includes(section)) {
     resetOffline();
   }
@@ -305,14 +430,21 @@ function chooseOfflineFilter(nextFilter) {
 }
 
 async function openOwned(id, trigger) {
-  const recipe = owned.get(id);
+  const fictional = /^external:fictional-offline:(\d+)$/.exec(id);
+  const recipe = owned.get(id) ?? (fictional
+    ? { id, source: 'external', detailLevel: 'summary', externalProvider: 'fictional-offline', externalId: fictional[1] }
+    : /^[a-z0-9][a-z0-9:_-]{0,199}$/.test(id) && !id.startsWith('external:')
+      ? { id, source: 'database', detailLevel: 'preview' } : null);
   if (!recipe || !previewSession) return;
   const generation = ++detailGeneration;
   const request = previewSession.requestRecipeFinderPreviewDetail(recipe, trigger);
   if (authState.status === 'authenticated') modal.status('Loading recipe details', 'Checking your access to this recipe.', trigger);
   const result = await request;
   if (retired || generation !== detailGeneration) return;
-  if (result.status === RECIPE_DETAIL_RESULT.PROTECTED_DETAIL) modal.detail(result.data, trigger);
+  if (result.status === RECIPE_DETAIL_RESULT.PROTECTED_DETAIL) {
+    displayedRecipe = result.data;
+    modal.detail(result.data, trigger);
+  }
   else if (result.status === RECIPE_DETAIL_RESULT.PENDING_AUTH) modal.status('Checking account', 'Please wait while account access is checked.', trigger);
   else if (result.status === RECIPE_DETAIL_RESULT.UNAVAILABLE || result.status === RECIPE_DETAIL_RESULT.DENIED) {
     modal.status('Recipe details unavailable', 'This recipe could not be opened safely.', trigger);
@@ -325,16 +457,44 @@ async function openMealDb(id, trigger) {
   const generation = ++detailGeneration;
   const result = await previewSession.requestPublicMealDbDetail(recipe, trigger);
   if (retired || generation !== detailGeneration) return;
-  if (result.status === RECIPE_DETAIL_RESULT.PUBLIC_EXTERNAL_DETAIL) modal.detail(result.data, trigger);
+  if (result.status === RECIPE_DETAIL_RESULT.PUBLIC_EXTERNAL_DETAIL) {
+    displayedRecipe = result.data;
+    modal.detail(result.data, trigger);
+  }
   else modal.status('Recipe details unavailable', 'TheMealDB details could not be opened safely.', trigger);
+}
+
+async function openCollectionMealDb(id, trigger) {
+  if (authState.status !== 'authenticated') return;
+  const epoch = collectionsEpoch;
+  const userId = authState.userId;
+  const generation = ++detailGeneration;
+  modal.status('Loading TheMealDB recipe', 'Checking the public recipe source.', trigger);
+  try {
+    if (!collectionMealDb) collectionMealDb = createMealDbRecipeSource({
+      client: createMealDbClient({ fetchImpl: window.fetch.bind(window) }),
+    });
+    const recipe = await collectionMealDb.getDetails(id);
+    if (retired || epoch !== collectionsEpoch || authState.userId !== userId || generation !== detailGeneration) return;
+    const result = await previewSession.requestPublicMealDbDetail(recipe, trigger);
+    if (retired || epoch !== collectionsEpoch || authState.userId !== userId || generation !== detailGeneration) return;
+    if (result.status !== RECIPE_DETAIL_RESULT.PUBLIC_EXTERNAL_DETAIL) throw new TypeError();
+    displayedRecipe = result.data;
+    modal.detail(result.data, trigger);
+  } catch {
+    if (!retired && epoch === collectionsEpoch && authState.userId === userId && generation === detailGeneration) {
+      modal.status('Recipe unavailable', 'TheMealDB recipe could not be loaded.', trigger);
+    }
+  }
 }
 
 function handleAuthState(next) {
   if (retired) return;
   const changed = authState.status !== next?.status || authState.userId !== next?.userId;
   authState = next;
-  if (changed) closeDetail(false);
+  if (changed) { collectionsEpoch += 1; closeDetail(false); }
   previewSession?.handleAuthState(next);
+  void collectionsController?.handleAuthState(next);
   void accountFavorites?.handleAuthState(next);
   if (adminLink) void adminLink.handleAuthState(next);
   if (!accountFavorites) {
@@ -345,6 +505,7 @@ function handleAuthState(next) {
     });
     render();
   }
+  renderCollections();
 }
 
 function onClientReady(client, availability) {
@@ -358,6 +519,10 @@ function onClientReady(client, availability) {
   });
   previewSession.handleAuthState(authState);
   accountFavorites = createDashboardAccountFavorites({ client, guestFavorites: guestFavoriteIds });
+  collectionsController = createRecipeCollectionsController({
+    service: createSupabaseRecipeCollectionsService(client), onState: renderCollections,
+  });
+  void collectionsController.handleAuthState(authState);
   void accountFavorites.handleAuthState(authState);
   unsubscribeFavorites = accountFavorites.subscribe((next) => { favoriteState = next; render(); });
   if (availability.adminPreviewAvailable === true) {
@@ -371,6 +536,7 @@ function onClientReady(client, availability) {
 }
 
 function initialize() {
+  installCollectionsPage();
   renderTaxonomy();
   render();
   setSidebar(false);
@@ -398,6 +564,14 @@ function initialize() {
       view = 'default';
       void loadPreviews();
     }
+  });
+  document.addEventListener('submit', (event) => {
+    const form = event.target;
+    if (form?.dataset?.collectionCreate !== 'true' && !form?.dataset?.collectionRename) return;
+    event.preventDefault();
+    const name = form.elements.namedItem('name')?.value;
+    if (form.dataset.collectionCreate === 'true') void collectionsController?.create(name);
+    else void collectionsController?.rename(form.dataset.collectionRename, name);
   });
   $('#search-source-selector').addEventListener('change', (event) => {
     if (event.target.name !== 'recipe-source') return;
@@ -431,6 +605,45 @@ function initialize() {
   });
   document.addEventListener('click', (event) => {
     const target = event.target;
+    const addButton = target.closest('[data-collection-add]');
+    if (addButton) {
+      if (authState.status === 'guest') modal.collectionsLoginPrompt();
+      else if (authState.status === 'authenticated' && collectionsController?.getState().status === 'ready') {
+        modal.collectionPicker(displayedRecipe?.name ?? 'this recipe', collectionsController.getState().collections);
+      } else modal.status('Collections unavailable', 'Wait for account verification or try again.');
+      return;
+    }
+    const addTarget = target.closest('[data-collection-target]');
+    if (addTarget && displayedRecipe) {
+      const epoch = collectionsEpoch;
+      const generation = detailGeneration;
+      void collectionsController?.add(addTarget.dataset.collectionTarget, displayedRecipe).then((result) => {
+        if (retired || epoch !== collectionsEpoch || generation !== detailGeneration) return;
+        modal.status(result.ok ? 'Added to Collection' : 'Could not add recipe',
+          result.ok ? 'This recipe is now in your collection.' : 'The recipe was not saved. Try again.');
+      });
+      return;
+    }
+    const collectionView = target.closest('[data-collection-view]');
+    if (collectionView) {
+      const id = collectionView.dataset.collectionView;
+      if (id.startsWith('external:themealdb:')) void openCollectionMealDb(id, collectionView);
+      else void openOwned(id, collectionView);
+      return;
+    }
+    const collectionRemove = target.closest('[data-collection-remove]');
+    if (collectionRemove) {
+      void collectionsController?.remove(collectionRemove.dataset.collectionId, collectionRemove.dataset.collectionRemove);
+      return;
+    }
+    const collectionDelete = target.closest('[data-collection-delete]');
+    if (collectionDelete) {
+      if (window.confirm('Delete this collection and remove its saved recipe references?')) {
+        void collectionsController?.delete(collectionDelete.dataset.collectionDelete);
+      }
+      return;
+    }
+    if (target.closest('[data-collection-retry]')) { void collectionsController?.refresh(); return; }
     const removeUnresolved = target.closest('[data-remove-unresolved]');
     if (removeUnresolved && favoriteState.mode === 'guest') {
       guestFavoriteIds.delete(removeUnresolved.dataset.removeUnresolved);
@@ -501,6 +714,7 @@ function initialize() {
     previewSession?.cleanup();
     unsubscribeFavorites?.();
     accountFavorites?.cleanup();
+    collectionsController?.cleanup();
     adminLink?.cleanup();
     auth.cleanup();
   });

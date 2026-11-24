@@ -141,3 +141,18 @@ body.dark{--sidebar-link:#d5cfee}
 .option-b-login-gate a,.option-b-login-gate button{min-height:44px;display:inline-flex;align-items:center;justify-content:center;padding:10px 16px;border-radius:12px;font-weight:700}
 .option-b-login-gate a{background:var(--purple);color:#fff;text-decoration:none}
 .option-b-login-gate button{border:1px solid var(--line);background:var(--panel);color:var(--text)}
+
+/* Candidate-only Collections; the current dashboard creates none of these nodes. */
+.option-b-collections[hidden]{display:none}
+.option-b-collections{display:grid;gap:14px;min-width:0}
+.option-b-collections>h2{margin:0;font:800 21px/1.2 'Manrope',sans-serif}
+.option-b-collections-status{margin:0;color:var(--muted)}
+#collections-content{display:grid;gap:16px;min-width:0}
+.option-b-collection-card{display:grid;gap:12px;min-width:0;padding:18px;border:1px solid var(--line);border-radius:18px;background:var(--panel)}
+.option-b-collection-card h3{margin:0;overflow-wrap:anywhere}
+.option-b-collections-form,.option-b-collections-actions,.option-b-collection-item{display:flex;align-items:center;flex-wrap:wrap;gap:10px;min-width:0}
+.option-b-collections-form input{flex:1 1 180px;min-width:0;min-height:44px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--text)}
+.option-b-collections .view-btn,.option-b-collection-add{min-height:44px}
+.option-b-collection-item{justify-content:space-between;padding:10px 0;border-top:1px solid var(--line)}
+.option-b-collection-item span{flex:1 1 170px;min-width:0;overflow-wrap:anywhere}
+.option-b-collections button:focus-visible,.option-b-collections a:focus-visible,.option-b-collections input:focus-visible{outline:3px solid var(--purple);outline-offset:2px}

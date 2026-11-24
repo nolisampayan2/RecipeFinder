@@ -7,7 +7,7 @@ function fakeDocument() {
   function element(tag) {
     const node = {
       tagName: tag.toUpperCase(), children: [], attributes: {}, listeners: {},
-      className: '', textContent: '', hidden: false, isConnected: true,
+      className: '', textContent: '', hidden: false, isConnected: true, dataset: {},
       classList: { add(...names) { node.className += ` ${names.join(' ')}`; } },
       append(...items) { this.children.push(...items); },
       replaceChildren(...items) { this.children = items; },
@@ -16,6 +16,11 @@ function fakeDocument() {
       removeEventListener(name) { delete this.listeners[name]; },
       focus() { documentLike.activeElement = this; },
       contains(target) { return this === target || this.children.some((child) => child.contains?.(target)); },
+      querySelector(selector) {
+        if (selector === 'button') return this.children.find((child) => child.tagName === 'BUTTON'
+          || child.querySelector?.('button')) ?? null;
+        return null;
+      },
       querySelectorAll() { return []; },
     };
     return node;
@@ -65,4 +70,19 @@ assert.equal(gate.open({ recipe: {
   id: 'creamy-garlic-pasta', source: 'built-in', detailLevel: 'preview', name: 'Safe recipe',
 }, trigger }), true);
 gate.cleanup();
+assert.equal(modal.detail({ id: 'external:themealdb:52772', source: 'external', name: 'Public meal',
+  image: '', fallbackImage: '', category: 'Chicken', cuisine: 'Filipino', description: 'Public',
+  ingredients: [['Chicken', '1 cup']], instructions: 'Cook.', tutorial: '' }, trigger), true);
+const detail = content.children[0];
+assert.equal(detail.children[1].children.at(-1).dataset.collectionAdd, 'true');
+assert.equal(modal.collectionPicker('Public meal', [{ id: '123e4567-e89b-42d3-a456-426614174000',
+  name: '<Family meals>' }]), true);
+const picker = content.children[0];
+assert.equal(picker.children[2].children[0].textContent, '<Family meals>');
+assert.equal(picker.children[2].children[0].dataset.collectionTarget,
+  '123e4567-e89b-42d3-a456-426614174000');
+assert.equal(modal.collectionsLoginPrompt(), true);
+const prompt = content.children[0];
+assert.equal(prompt.children[2].children[0].href, 'login.html');
+assert.equal(prompt.children[2].children[1].href, 'register.html');
 console.log('Candidate login dialog passed offline fake-DOM checks.');

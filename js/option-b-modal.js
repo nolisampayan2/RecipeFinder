@@ -81,9 +81,41 @@ export function createOptionBModal(documentLike) {
       instructions.append(link);
     }
     columns.append(ingredients, instructions);
-    copy.append(columns);
+    const save = element('button', 'view-btn option-b-collection-add', 'Add to Collection');
+    save.type = 'button';
+    save.dataset.collectionAdd = 'true';
+    copy.append(columns, save);
     wrapper.append(image, copy);
     return present({ content: wrapper, heading, trigger: nextTrigger });
+  }
+
+  function collectionPicker(recipeName, collections) {
+    const section = element('section', 'modal-copy option-b-login-gate');
+    const heading = element('h2', '', 'Add to Collection');
+    section.append(heading, element('p', '', `Choose a collection for ${recipeName}.`));
+    const actions = element('div');
+    for (const collection of collections) {
+      const button = element('button', '', collection.name);
+      button.type = 'button';
+      button.dataset.collectionTarget = collection.id;
+      actions.append(button);
+    }
+    if (!collections.length) actions.append(element('p', '', 'Create a collection first from My Recipe Collections.'));
+    section.append(actions);
+    return present({ content: section, heading, initialFocus: actions.querySelector('button') ?? closeButton });
+  }
+
+  function collectionsLoginPrompt() {
+    const section = element('section', 'modal-copy option-b-login-gate');
+    const heading = element('h2', '', 'Sign in to use Collections');
+    const links = element('div');
+    const signIn = element('a', '', 'Sign In');
+    signIn.href = 'login.html';
+    const register = element('a', '', 'Create Account');
+    register.href = 'register.html';
+    links.append(signIn, register);
+    section.append(heading, element('p', '', 'Save recipes in named collections after signing in.'), links);
+    return present({ content: section, heading, initialFocus: signIn });
   }
 
   function handleTab(event) {
@@ -106,5 +138,6 @@ export function createOptionBModal(documentLike) {
     return false;
   }
 
-  return Object.freeze({ present, close, status, detail, handleTab, isOpen: () => !root.hidden });
+  return Object.freeze({ present, close, status, detail, collectionPicker, collectionsLoginPrompt,
+    handleTab, isOpen: () => !root.hidden });
 }

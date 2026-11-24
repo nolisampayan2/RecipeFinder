@@ -20,10 +20,11 @@ function actualFunction(name) {
 assert.match(source, /handlePrimaryNavigation\(navigation\.dataset\.section, event\)/,
   'The actual delegated click handler must use the tested navigation function');
 
-const calls = { loads: 0, renders: [], scrolls: 0, sidebar: [], focus: 0, prevented: 0, resets: 0 };
+const calls = { loads: 0, renders: [], collectionRenders: 0, scrolls: 0, sidebar: [], focus: 0, prevented: 0, resets: 0 };
 const elements = Object.fromEntries([
   '#search-source-offline', '#search-source-online', '#offline-search-description',
   '#online-search-disclosure', '#search-input', '#recommended', '#menu-btn',
+  '#collections',
 ].map((selector) => [selector, {
   checked: false, hidden: false, value: 'old search',
   scrollIntoView() { calls.scrolls += 1; },
@@ -36,6 +37,7 @@ const context = {
   $: (selector) => elements[selector],
   loadPreviews() { calls.loads += 1; return Promise.resolve(); },
   render() { calls.renders.push(context.view); },
+  renderCollections() { calls.collectionRenders += 1; },
   setSidebar(value) { calls.sidebar.push(value); },
 };
 runInNewContext([
@@ -76,5 +78,11 @@ assert.equal(calls.prevented, 8, 'Only Favorites navigation prevents the native 
 assert.equal(calls.sidebar.every((value) => value === false), true);
 assert.equal(calls.focus, 12, 'Mobile navigation restores menu-button focus');
 assert.equal(calls.scrolls, 8, 'Favorites navigation scrolls to the saved collection');
+navigate('collections');
+assert.equal(context.view, 'collections');
+assert.equal(calls.renders.at(-1), 'collections');
+assert.equal(calls.collectionRenders, 1);
+navigate('favorites');
+assert.equal(context.view, 'favorites', 'The Collections view must return to Favorites');
 
-console.log('Candidate Home, Explore, Categories, Cuisines, and Favorites transitions passed.');
+console.log('Candidate discovery, Collections, and Favorites transitions passed.');

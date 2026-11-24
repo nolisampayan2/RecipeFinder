@@ -3,7 +3,7 @@ import { readFile, rm } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import { recipes as fullBuiltInRecipes } from '../js/data.js';
 import { buildOptionBCandidate } from '../scripts/build-option-b-candidate.mjs';
-import { PRODUCTION_OUTPUT_FILES, ADMIN_PREVIEW_OUTPUT_FILES } from '../scripts/build-vercel-static.mjs';
+import { PRODUCTION_OUTPUT_FILES, ADMIN_PREVIEW_OUTPUT_FILES, ADMIN_PREVIEW_FILES } from '../scripts/build-vercel-static.mjs';
 
 const publicConfig = Object.freeze({
   url: 'https://recipefinder-test.supabase.co',
@@ -19,20 +19,31 @@ assert.equal(PRODUCTION_OUTPUT_FILES.length, 51);
 assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.length, 62);
 assert.equal(PRODUCTION_OUTPUT_FILES.includes('js/option-b-app.js'), false);
 assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.includes('js/option-b-app.js'), false);
+for (const module of ['js/supabase-recipe-collections.js', 'js/recipe-collections-controller.js']) {
+  assert.equal(PRODUCTION_OUTPUT_FILES.includes(module), false);
+  assert.equal(ADMIN_PREVIEW_OUTPUT_FILES.includes(module), false);
+}
 await assert.rejects(buildOptionBCandidate(), /Public Supabase configuration generation failed/);
 
 for (const adminPreview of [false, true]) {
   const output = await buildOptionBCandidate({ publicConfig, adminPreview });
   try {
     assert.match(output.directory, /recipefinder-option-b-/);
-    assert.equal(output.files.length, adminPreview ? 61 : 50);
+    assert.equal(output.files.length, adminPreview ? 63 : 52);
     assert.equal(output.files.includes('js/option-b-app.js'), true);
     assert.equal(output.files.includes('js/recipe-preview-session.js'), true);
     assert.equal(output.files.includes('js/recipe-login-gate.js'), true);
     assert.equal(output.files.includes('js/supabase-recipe-previews.js'), true);
     assert.equal(output.files.includes('js/supabase-recipe-details.js'), true);
+    assert.equal(output.files.includes('js/supabase-recipe-collections.js'), true);
+    assert.equal(output.files.includes('js/recipe-collections-controller.js'), true);
+    assert.equal(output.files.includes('js/dashboard-account-favorites.js'), true);
     assert.equal(output.files.includes('admin.html'), adminPreview);
     assert.equal(output.files.includes('js/dashboard-admin-link.js'), adminPreview);
+    if (!adminPreview) {
+      for (const adminFile of ADMIN_PREVIEW_FILES) assert.equal(output.files.includes(adminFile), false,
+        `${adminFile} must not be shipped in the Production candidate`);
+    }
     for (const path of forbiddenPaths) assert.equal(output.files.includes(path), false, `${path} must be excluded`);
 
     const html = await readFile(join(output.directory, 'index.html'), 'utf8');
@@ -74,6 +85,8 @@ for (const adminPreview of [false, true]) {
     assert.match(javascript, /requestRecipeFinderPreviewDetail/);
     assert.match(javascript, /requestPublicMealDbDetail/);
     assert.match(javascript, /createRecipeLoginGate/);
+    assert.match(javascript, /createRecipeCollectionsController/);
+    assert.doesNotMatch(javascript, /localStorage\.setItem\([^\n]*collection/i);
   } finally {
     await rm(output.directory, { recursive: true, force: true });
   }
