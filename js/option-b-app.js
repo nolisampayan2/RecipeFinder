@@ -19,7 +19,11 @@ import { createMealDbRecipeSource } from './mealdb-recipe-source.js';
 // current Production or Admin Preview entry point.
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const CATEGORY_NAMES = Object.freeze(['Chicken', 'Beef', 'Seafood', 'Pasta', 'Vegetarian', 'Dessert', 'Breakfast', 'Soup']);
+const CATEGORIES = Object.freeze([
+  ['Chicken', '🍗'], ['Beef', '🥩'], ['Seafood', '🐟'], ['Pasta', '🍝'],
+  ['Vegetarian', '🥗'], ['Dessert', '🍰'], ['Breakfast', '🍳'], ['Soup', '🥣'],
+]);
+const IMAGE_FALLBACK = 'assets/recipefinder-favicon.svg';
 const CUISINE_NAMES = Object.freeze(['Italian', 'American', 'British', 'Mexican', 'Japanese', 'Indian', 'Mediterranean', 'French', 'Filipino']);
 const FAVORITES_KEY = 'recipefinder:favorites';
 const THEME_KEY = 'recipefinder:theme';
@@ -210,10 +214,9 @@ function card(recipe) {
   item.dataset.id = recipe.id;
   const image = node('img', 'card-image');
   image.alt = recipe.name;
-  const imageUrl = safeImageUrl(recipe.image);
-  if (imageUrl) image.src = imageUrl;
-  const fallback = safeImageUrl(recipe.fallbackImage);
-  if (fallback) image.dataset.fallbackImage = fallback;
+  const fallback = safeImageUrl(recipe.fallbackImage) || IMAGE_FALLBACK;
+  image.src = safeImageUrl(recipe.image) || fallback;
+  image.dataset.fallbackImage = fallback;
   const heart = node('button', `heart${favoriteIds().includes(recipe.id) ? ' saved' : ''}`, favoriteIds().includes(recipe.id) ? '♥' : '♡');
   heart.type = 'button';
   heart.dataset.favorite = recipe.id;
@@ -244,8 +247,23 @@ function renderFavorites() {
   list.replaceChildren();
   for (const id of ids.slice(0, 4)) {
     const recipe = owned.get(id) ?? (source === 'online' ? live?.getState().recipes.find((item) => item.id === id) : null);
-    const item = node('div', 'favorite-item');
-    item.append(node('strong', '', recipe?.name ?? 'Saved recipe unavailable'));
+    const item = node('div', 'favorite-item option-b-favorite-item');
+    if (recipe) {
+      const image = node('img');
+      image.alt = '';
+      image.loading = 'lazy';
+      image.dataset.fallbackImage = safeImageUrl(recipe.fallbackImage) || IMAGE_FALLBACK;
+      image.src = safeImageUrl(recipe.image) || image.dataset.fallbackImage;
+      item.append(image);
+    } else {
+      const icon = node('span', 'favorite-placeholder-icon', '♡');
+      icon.setAttribute('aria-hidden', 'true');
+      item.append(icon);
+    }
+    const copy = node('div');
+    copy.append(node('strong', '', recipe?.name ?? 'Saved recipe unavailable'));
+    if (recipe) copy.append(node('small', '', recipe.category));
+    item.append(copy);
     if (favoriteState.mode === 'guest' || (favoriteState.mode === 'account-ready' && owned.has(id))) {
       const remove = node('button', 'mini-remove', '×');
       remove.type = 'button';
@@ -322,10 +340,17 @@ function render() {
 }
 
 function renderTaxonomy() {
-  $('#category-row').replaceChildren(...CATEGORY_NAMES.map((name) => {
-    const button = node('button', 'category', name);
+  $('#category-row').replaceChildren(...CATEGORIES.map(([name, emoji]) => {
+    const button = node('button', 'category');
     button.type = 'button';
     button.dataset.filter = name;
+    const recipe = BUILT_IN_RECIPE_PREVIEWS.find((preview) => preview.category === name);
+    const image = node('img');
+    image.alt = '';
+    image.loading = 'lazy';
+    image.dataset.fallbackImage = safeImageUrl(recipe?.fallbackImage) || IMAGE_FALLBACK;
+    image.src = safeImageUrl(recipe?.image) || image.dataset.fallbackImage;
+    button.append(image, node('span', '', `${emoji} ${name}`));
     return button;
   }));
   $('#cuisine-list').replaceChildren(...CUISINE_NAMES.map((name) => {
@@ -334,6 +359,41 @@ function renderTaxonomy() {
     button.dataset.filter = name;
     return button;
   }));
+}
+
+function handleImageError(event) {
+  const image = event.target;
+  if (!(image instanceof HTMLImageElement)) return;
+  const fallback = safeImageUrl(image.dataset.fallbackImage);
+  if (fallback && image.getAttribute('src') !== fallback) image.src = fallback;
+}
+
+function scrollToSearchResults() {
+  $('#recommended').scrollIntoView({
+    behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  });
+}
+
+function handleSearchSubmit(event) {
+  event.preventDefault();
+  const query = $('#search-input').value.trim();
+  if (source === 'online') {
+    if (!query) return;
+    search = query;
+    filter = '';
+    view = 'default';
+    render();
+    if (!live) live = createLiveMealDbDashboard({ fetchImpl: window.fetch.bind(window), onState: render });
+    void live.search(query);
+  } else {
+    search = query;
+    filter = '';
+    view = 'default';
+    render();
+    void loadPreviews();
+  }
+  scrollToSearchResults();
 }
 
 function publishEligibleFavorites() {
@@ -539,6 +599,7 @@ function initialize() {
   installCollectionsPage();
   renderTaxonomy();
   render();
+  document.addEventListener('error', handleImageError, true);
   setSidebar(false);
   initializeCategoryCarousel();
   try {
@@ -548,23 +609,7 @@ function initialize() {
   const auth = createDashboardAuthIntegration({ onClientReady, onAuthStateChange: handleAuthState });
   void auth.activate();
 
-  $('#search-form').addEventListener('submit', (event) => {
-    event.preventDefault();
-    const query = $('#search-input').value.trim();
-    if (source === 'online') {
-      if (!query) return;
-      search = query;
-      filter = '';
-      view = 'default';
-      if (!live) live = createLiveMealDbDashboard({ fetchImpl: window.fetch.bind(window), onState: render });
-      void live.search(query);
-    } else {
-      search = query;
-      filter = '';
-      view = 'default';
-      void loadPreviews();
-    }
-  });
+  $('#search-form').addEventListener('submit', handleSearchSubmit);
   document.addEventListener('submit', (event) => {
     const form = event.target;
     if (form?.dataset?.collectionCreate !== 'true' && !form?.dataset?.collectionRename) return;

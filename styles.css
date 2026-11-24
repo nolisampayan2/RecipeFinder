@@ -142,6 +142,11 @@ body.dark{--sidebar-link:#d5cfee}
 .option-b-login-gate a{background:var(--purple);color:#fff;text-decoration:none}
 .option-b-login-gate button{border:1px solid var(--line);background:var(--panel);color:var(--text)}
 
+/* Candidate-only Saved Recipes rows. */
+.option-b-favorite-item{display:grid;grid-template-columns:65px minmax(0,1fr) 44px;align-items:center;gap:8px;padding-inline-end:8px}
+.option-b-favorite-item .mini-remove{width:44px;min-width:44px;padding:0}
+.option-b-favorite-item small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
 /* Candidate-only Collections; the current dashboard creates none of these nodes. */
 .option-b-collections[hidden]{display:none}
 .option-b-collections{display:grid;gap:14px;min-width:0}

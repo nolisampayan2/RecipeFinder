@@ -31,6 +31,7 @@ for (const adminPreview of [false, true]) {
     assert.match(output.directory, /recipefinder-option-b-/);
     assert.equal(output.files.length, adminPreview ? 63 : 52);
     assert.equal(output.files.includes('js/option-b-app.js'), true);
+    assert.equal(output.files.includes('assets/recipefinder-favicon.svg'), true);
     assert.equal(output.files.includes('js/recipe-preview-session.js'), true);
     assert.equal(output.files.includes('js/recipe-login-gate.js'), true);
     assert.equal(output.files.includes('js/supabase-recipe-previews.js'), true);
