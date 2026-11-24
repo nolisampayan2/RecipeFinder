@@ -130,7 +130,7 @@ await cleanupRequest;
 assert.equal(cleanup.getState().status, ADMIN_CMS_STATUS.RETIRED);
 
 const refreshedRecipes = Object.freeze([Object.freeze({
-  id: 'cms:two', name: 'Refreshed Draft', category: 'Lunch', cuisine: 'Filipino', status: 'draft', sourceType: 'cms',
+  id: 'cms:two', name: 'Refreshed Draft', category: 'Lunch', cuisine: 'Filipino', status: 'published', sourceType: 'cms',
 })]);
 let refreshRows = recipes;
 const refreshDeps = dependencies({
@@ -139,6 +139,7 @@ const refreshDeps = dependencies({
 });
 const refreshing = createAdminCmsCoordinator(refreshDeps);
 await refreshing.acceptAuthState({ status: AUTH_SESSION_STATUS.AUTHENTICATED, user: { id: USER_A } });
+const initialRefreshState = refreshing.getState();
 refreshRows = refreshedRecipes;
 assert.equal(await refreshing.refreshRecipes(), true);
 assert.deepEqual(refreshing.getState(), { status: ADMIN_CMS_STATUS.READY, recipes: refreshedRecipes });
@@ -271,14 +272,25 @@ function element() {
 const elements = {
   root: element(), status: element(), content: element(), rows: element(), empty: element(),
   search: element(), statusFilter: element(), count: element(), create: element(),
+  loadedTotal: element(), loadedPublished: element(), loadedDrafts: element(),
   signIn: element(), logout: element(),
 };
 elements.statusFilter.value = 'all';
 const fakeDocument = { createElement() { return element(); } };
+assert.equal(renderAdminCmsState(elements, initialRefreshState, fakeDocument), true);
+assert.deepEqual([elements.loadedTotal.textContent, elements.loadedPublished.textContent, elements.loadedDrafts.textContent],
+  ['1', '0', '1'], 'Initial authorized snapshot supplies overview counts');
+assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.CHECKING, recipes: [] }, fakeDocument), true);
+assert.deepEqual([elements.loadedTotal.textContent, elements.loadedPublished.textContent, elements.loadedDrafts.textContent],
+  ['', '', ''], 'Refresh checking state clears previous snapshot counts');
+assert.equal(renderAdminCmsState(elements, refreshing.getState(), fakeDocument), true);
+assert.deepEqual([elements.loadedTotal.textContent, elements.loadedPublished.textContent, elements.loadedDrafts.textContent],
+  ['1', '1', '0'], 'Successful changed-snapshot refresh replaces overview counts');
 for (const status of [ADMIN_CMS_STATUS.LOADING, ADMIN_CMS_STATUS.ERROR]) {
   assert.equal(renderAdminCmsState(elements, { status, recipes: [] }, fakeDocument), true);
   assert.equal(elements.signIn.hidden, true, `${status} hides Sign In`);
   assert.equal(elements.logout.hidden, true, `${status} hides Sign Out`);
+  assert.equal(elements.loadedTotal.textContent, '', `${status} clears loaded counts`);
 }
 assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.CHECKING, recipes: [] }, fakeDocument), true);
 assert.equal(elements.content.hidden, true);
@@ -313,6 +325,8 @@ assert.equal(filterAdminRecipes(recipes, 'filipino').length, 1);
 assert.equal(filterAdminRecipes(recipes, 'published').length, 0);
 assert.equal(filterAdminRecipes(recipes, '', 'draft').length, 1);
 assert.equal(elements.count.textContent, '1 recipe');
+assert.deepEqual([elements.loadedTotal.textContent, elements.loadedPublished.textContent, elements.loadedDrafts.textContent],
+  ['1', '0', '1'], 'Overview counts the loaded unfiltered snapshot');
 assert.equal(elements.create.disabled, true, 'Live activation remains read only without injected fake services');
 
 const longName = `Long <Recipe> & safe ${'name '.repeat(45)}`.trim();
@@ -367,12 +381,18 @@ for (const [id, sourceType, status, editable] of [
 }
 assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.READY, recipes: mobileRecipes }, fakeDocument, '', 'all', mobileEditor), true);
 assert.equal(elements.count.textContent, '3 recipes');
+assert.deepEqual([elements.loadedTotal.textContent, elements.loadedPublished.textContent, elements.loadedDrafts.textContent],
+  ['3', '1', '2']);
 assert.equal(renderAdminCmsState(elements, { status: ADMIN_CMS_STATUS.READY, recipes: mobileRecipes }, fakeDocument, 'external', 'draft', mobileEditor), true);
 assert.equal(elements.rows.children.length, 1, 'Search and status filtering continue to share the same row renderer');
 assert.equal(elements.count.textContent, '1 of 3 recipes');
+assert.deepEqual([elements.loadedTotal.textContent, elements.loadedPublished.textContent, elements.loadedDrafts.textContent],
+  ['3', '1', '2'], 'Search and status filters must not change loaded-snapshot counts');
 for (const status of [ADMIN_CMS_STATUS.DENIED, ADMIN_CMS_STATUS.ERROR]) {
   assert.equal(renderAdminCmsState(elements, { status, recipes: mobileRecipes }, fakeDocument, '', 'all', mobileEditor), true);
   assert.equal(elements.rows.children.length, 0, `${status} state must clear catalog rows`);
+  assert.deepEqual([elements.loadedTotal.textContent, elements.loadedPublished.textContent, elements.loadedDrafts.textContent],
+    ['', '', ''], `${status} clears protected overview values`);
 }
 
 function mediaQuery(initialMatches) {
@@ -444,7 +464,10 @@ const drawer = createAdminDrawerController({
   elements: drawerElements,
   documentLike: drawerDocument,
   windowLike: {
-    matchMedia() { return mobileMedia; },
+    matchMedia(query) {
+      assert.equal(query, '(max-width: 1239px)', 'Drawer behavior uses the tablet card breakpoint');
+      return mobileMedia;
+    },
     requestAnimationFrame(callback) { return drawerFrames.request(callback); },
     cancelAnimationFrame(id) { drawerFrames.cancel(id); },
   },
@@ -556,7 +579,10 @@ const failedFocusDrawer = createAdminDrawerController({
   elements: failedFocusElements,
   documentLike: failedFocusDocument,
   windowLike: {
-    matchMedia() { return failedFocusMedia; },
+    matchMedia(query) {
+      assert.equal(query, '(max-width: 1239px)', 'Failed-focus drawer uses the same breakpoint');
+      return failedFocusMedia;
+    },
     requestAnimationFrame(callback) { return failedFocusFrames.request(callback); },
     cancelAnimationFrame(id) { failedFocusFrames.cancel(id); },
   },
@@ -584,6 +610,7 @@ assert.equal(failedFocusDrawer.cleanup(), true);
 const pageElements = {
   root: element(), status: element(), content: element(), rows: element(), empty: element(),
   search: element(), statusFilter: element(), count: element(), create: element(),
+  loadedTotal: element(), loadedPublished: element(), loadedDrafts: element(),
   signIn: element(), logout: element(), sidebar: element(), workspace: element(),
   menuToggle: element(), menuClose: element(), menuBackdrop: element(),
 };
@@ -596,6 +623,9 @@ const pageSelectors = new Map([
   ['[data-admin-search]', pageElements.search],
   ['[data-admin-status-filter]', pageElements.statusFilter],
   ['[data-admin-count]', pageElements.count],
+  ['[data-admin-loaded-total]', pageElements.loadedTotal],
+  ['[data-admin-loaded-published]', pageElements.loadedPublished],
+  ['[data-admin-loaded-drafts]', pageElements.loadedDrafts],
   ['[data-admin-create]', pageElements.create],
   ['[data-admin-sign-in]', pageElements.signIn],
   ['[data-admin-logout]', pageElements.logout],
@@ -733,10 +763,14 @@ await new Promise((resolve) => setImmediate(resolve));
 assert.equal(ownerCreations, 1);
 assert.deepEqual(acceptedClients, [sharedClient, sharedClient, sharedClient, sharedClient, sharedClient]);
 assert.equal(pageElements.root.dataset.adminState, ADMIN_CMS_STATUS.READY);
+assert.match(pageElements.status.textContent, /Recipe catalog ready\./, 'Normal authorized catalog has text feedback');
+assert.equal(pageElements.status.classList['is-error'], false, 'Normal catalog-ready notice is not an error');
 assert.deepEqual(editorAuthorizations.at(-1), [true, USER_A]);
 assert.equal(pageElements.signIn.hidden, true);
 assert.equal(pageElements.logout.hidden, false);
 assert.equal(pageElements.rows.children.length, 1);
+assert.deepEqual([pageElements.loadedTotal.textContent, pageElements.loadedPublished.textContent, pageElements.loadedDrafts.textContent],
+  ['1', '0', '1'], 'Activated Admin page renders loaded-snapshot counts');
 assert.equal(pageElements.create.disabled, false, 'Create unlocks after authorized active taxonomies load');
 pageElements.create.emit('click');
 await new Promise((resolve) => setImmediate(resolve));
@@ -1085,6 +1119,8 @@ assert.equal(integrationStatusCalls, 2);
 assert.equal(integrationRows[0].status, 'draft');
 assert.equal(integrationMap.get('[data-admin-rows]').children[0].children[4].children[1].textContent,
   'Publish');
+assert.equal(integrationMap.get('[data-admin-status]').classList['is-error'], false,
+  'Successful Unpublish leaves no stale error presentation');
 integrationStatusDeferred = deferred();
 const delayedPublishButton = integrationMap.get('[data-admin-rows]').children[0].children[4].children[1];
 delayedPublishButton.emit('click');
@@ -1152,6 +1188,34 @@ integrationExpiresAt = Math.floor(integrationNow / 1000) + 60;
 integrationSessionListener({ status: 'authenticated', user: { id: USER_A } });
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY);
+const statusNoticeElement = integrationMap.get('[data-admin-status]');
+const currentStatusButton = () => integrationMap.get('[data-admin-rows]').children[0].children[4].children[1];
+const failCurrentStatusAction = async (label) => {
+  integrationStatusDeferred = deferred();
+  currentStatusButton().emit('click');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(statusNoticeElement.classList['is-error'], false, `${label} retry clears stale error styling while pending`);
+  integrationStatusDeferred.resolve({ status: 'error', data: null });
+  integrationStatusDeferred = null;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(integrationRoot.dataset.adminState, ADMIN_CMS_STATUS.READY, `${label} failure keeps catalog ready`);
+  assert.equal(statusNoticeElement.textContent, 'Recipe status could not be confirmed. Reload before trying again.');
+  assert.equal(statusNoticeElement.classList['is-error'], true, `${label} failure uses error presentation`);
+};
+await failCurrentStatusAction('Publish');
+assert.equal(integrationRows[0].status, 'draft', 'Failed Publish does not change the recipe');
+currentStatusButton().emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationRows[0].status, 'published');
+assert.equal(statusNoticeElement.textContent, 'Recipe published.');
+assert.equal(statusNoticeElement.classList['is-error'], false, 'Successful Publish clears stale error styling');
+await failCurrentStatusAction('Unpublish');
+assert.equal(integrationRows[0].status, 'published', 'Failed Unpublish does not change the recipe');
+currentStatusButton().emit('click');
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(integrationRows[0].status, 'draft');
+assert.equal(statusNoticeElement.textContent, 'Recipe unpublished.');
+assert.equal(statusNoticeElement.classList['is-error'], false, 'Successful Unpublish clears stale error styling');
 integrationMap.get('[data-admin-rows]').children[0].children[4].children[0].emit('click');
 await new Promise((resolve) => setImmediate(resolve));
 integrationExpiresAt = Math.floor(Date.now() / 1000) - 1;
@@ -1355,6 +1419,26 @@ assert.equal((html.match(/data-admin-sign-in/g) ?? []).length, 1, 'Sign In contr
 assert.equal((html.match(/data-admin-logout/g) ?? []).length, 1, 'Sign Out control must not be duplicated');
 assert.doesNotMatch(html, /Restore fake admin|Switch fake account|data-offline/i);
 assert.match(html, /data-admin-content hidden/);
+for (const [attribute, label] of [
+  ['data-admin-loaded-total', 'Loaded recipes'],
+  ['data-admin-loaded-published', 'Loaded published'],
+  ['data-admin-loaded-drafts', 'Loaded drafts'],
+]) {
+  assert.match(html, new RegExp(`${attribute}[^>]*>0<`), `${label} has an initial safe value`);
+  assert.match(html, new RegExp(label), `${label} is explicitly scoped to loaded data`);
+}
+assert.match(html, /not database-wide totals/, 'Overview must disclose that loaded rows are not database-wide totals');
+assert.equal((html.match(/class="admin-stat-icon"/g) ?? []).length, 3, 'Each loaded count has one decorative icon');
+assert.match(html, /class="admin-stat-icon" aria-hidden="true"/, 'Overview icons are decorative');
+assert.equal((html.match(/<svg viewBox="0 0 24 24"/g) ?? []).length, 3, 'Overview icons are static inline SVG');
+assert.match(html, /id="admin-action-column" scope="col">Actions<\/th>/, 'Actions column has a visible heading');
+for (const section of ['Recipe information', 'Images and media', 'Cooking instructions']) {
+  assert.match(html, new RegExp(`<h3[^>]*>${section}<\\/h3>`), `${section} has a semantic heading`);
+}
+assert.match(html, /<fieldset class="admin-ingredients admin-form-section"><legend>Ingredients<\/legend>/, 'Ingredients retain a fieldset and legend');
+assert.match(html, /data-editor-field="imageUrl" aria-describedby="admin-image-hint admin-image-error"/, 'Image guidance and validation error are associated with the field');
+assert.match(html, /data-editor-field="tutorialUrl" aria-describedby="admin-tutorial-hint admin-tutorial-error"/, 'Tutorial guidance and validation error are associated with the field');
+assert.match(html, /data-admin-editor-cancel>Cancel<\/button><button class="admin-primary-button" type="submit" data-admin-editor-save>Save draft<\/button>/, 'Draft actions retain their controls and order');
 assert.match(html, /data-admin-search disabled/);
 assert.match(html, /<table>/, 'Desktop catalog remains a semantic table');
 assert.match(html, /<caption class="sr-only">RecipeFinder recipe administration catalog<\/caption>/);
@@ -1378,18 +1462,25 @@ assert.match(css, /background-position:right 16px center/);
 assert.match(css, /\.admin-shell\{[^}]*grid-template-columns:260px minmax\(0,1fr\)/);
 assert.match(css, /\.admin-sidebar\{[^}]*position:sticky;[^}]*height:100dvh/);
 assert.match(css, /\.admin-nav-link\[aria-current=page\]/);
-assert.match(css, /@media\(max-width:700px\)[\s\S]*?\.admin-sidebar\{position:fixed;[^}]*width:min\(270px,calc\(100vw - 48px\)\)/);
+assert.match(css, /@media\(max-width:1239px\)[\s\S]*?\.admin-sidebar\{position:fixed;[^}]*width:min\(270px,calc\(100vw - 48px\)\)/);
 assert.match(css, /body\.admin-drawer-open\{overflow:hidden\}/);
 assert.match(css, /@media\(prefers-reduced-motion:no-preference\)[\s\S]*?\.admin-sidebar\{transition:/);
 assert.match(css, /table\{width:100%;border-collapse:collapse;min-width:760px\}/, 'Desktop minimum width remains unchanged');
-assert.match(css, /@media\(max-width:700px\)[\s\S]*?\.admin-table-wrap\{overflow-x:visible/);
-assert.match(css, /@media\(max-width:700px\)[\s\S]*?\.admin-table-wrap table\{display:block;min-width:0\}/);
+assert.match(css, /@media\(max-width:1239px\)[\s\S]*?\.admin-table-wrap\{overflow-x:visible/);
+assert.match(css, /@media\(max-width:1239px\)[\s\S]*?\.admin-table-wrap table\{display:block;min-width:0\}/);
+assert.equal((css.match(/@media\(max-width:1239px\)/g) ?? []).length, 3,
+  'Drawer, mobile polish, and editor/card overrides share one breakpoint');
+assert.doesNotMatch(css, /@media\(max-width:700px\)/, 'Old drawer/card breakpoint must not leave a layout gap');
 assert.match(css, /\.admin-table-wrap tbody tr\{[^}]*text-align:left\}/);
 assert.match(css, /\.admin-table-wrap tbody td\{[^}]*justify-items:start;[^}]*width:100%;[^}]*text-align:left;/);
 assert.match(css, /\.admin-table-wrap tbody td::before\{display:block;content:attr\(data-label\);[^}]*text-align:left;/);
 assert.match(css, /\.admin-table-wrap tbody td\.admin-recipe-name\{[^}]*width:100%;[^}]*text-align:left\}/);
 assert.match(css, /\.admin-table-wrap tbody td \.status-badge\{justify-self:start\}/);
 assert.match(css, /\.admin-table-wrap \.admin-row-action\{width:100%;min-height:44px\}/);
+assert.match(css, /\.admin-shell\[data-admin-state=ready\] \.admin-status/, 'Ready status has a visual treatment tied to the actual state');
+assert.match(css, /\.admin-shell\[data-admin-state=ready\] \.admin-status:not\(\.is-error\)/, 'Ready-state styling must not mask an error notice');
+assert.match(css, /\.admin-form-section\{[^}]*min-width:0/, 'Editor sections can shrink on narrow screens');
+assert.match(css, /\.admin-form-section textarea\[name=instructions\]\{[^}]*line-height:1\.65/, 'Cooking instructions remain readable');
 const browserSource = await readFile(new URL('../js/admin-browser.js', import.meta.url), 'utf8');
 assert.doesNotMatch(browserSource, /innerHTML|insertAdjacentHTML|document\.write|service_role|(?:table|client|query)\s*\.\s*(?:insert|update|delete|upsert)\s*\(/i);
 assert.match(browserSource, /createSupabaseAdminRecipeMutationService/);

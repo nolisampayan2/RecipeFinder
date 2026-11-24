@@ -30,6 +30,9 @@ function requireElements(documentLike) {
     search: root?.querySelector?.('[data-admin-search]'),
     statusFilter: root?.querySelector?.('[data-admin-status-filter]'),
     count: root?.querySelector?.('[data-admin-count]'),
+    loadedTotal: root?.querySelector?.('[data-admin-loaded-total]'),
+    loadedPublished: root?.querySelector?.('[data-admin-loaded-published]'),
+    loadedDrafts: root?.querySelector?.('[data-admin-loaded-drafts]'),
     create: root?.querySelector?.('[data-admin-create]'),
     signIn: root?.querySelector?.('[data-admin-sign-in]'),
     logout: root?.querySelector?.('[data-admin-logout]'),
@@ -62,7 +65,7 @@ export function createAdminDrawerController({
   }
 
   const media = typeof windowLike?.matchMedia === 'function'
-    ? windowLike.matchMedia('(max-width: 700px)')
+    ? windowLike.matchMedia('(max-width: 1239px)')
     : { matches: false, addEventListener() {}, removeEventListener() {} };
   let mobile = Boolean(media.matches);
   let opened = false;
@@ -333,6 +336,8 @@ export function renderAdminCmsState(
     const ready = status === ADMIN_CMS_STATUS.READY;
     const allRecipes = ready && Array.isArray(state.recipes) ? state.recipes : Object.freeze([]);
     const recipes = ready ? filterAdminRecipes(allRecipes, query, statusFilter) : Object.freeze([]);
+    const loadedPublished = ready ? allRecipes.filter((recipe) => recipe.status === 'published').length : 0;
+    const loadedDrafts = ready ? allRecipes.filter((recipe) => recipe.status === 'draft').length : 0;
 
     elements.root.dataset.adminState = status;
     elements.root.setAttribute('aria-busy', String([
@@ -354,6 +359,9 @@ export function renderAdminCmsState(
     elements.count.textContent = ready
       ? `${recipes.length}${recipes.length === allRecipes.length ? '' : ` of ${allRecipes.length}`} ${allRecipes.length === 1 ? 'recipe' : 'recipes'}`
       : '0 recipes';
+    elements.loadedTotal.textContent = ready ? String(allRecipes.length) : '';
+    elements.loadedPublished.textContent = ready ? String(loadedPublished) : '';
+    elements.loadedDrafts.textContent = ready ? String(loadedDrafts) : '';
     const showSignIn = status === ADMIN_CMS_STATUS.GUEST;
     const showLogout = status === ADMIN_CMS_STATUS.READY;
     elements.signIn.hidden = !showSignIn;
@@ -457,6 +465,7 @@ export function createAdminPageActivation(options = {}) {
   let taxonomyGeneration = 0;
   let savedNotice = false;
   let statusNotice = '';
+  let statusNoticeTone = '';
   let statusActionGeneration = 0;
   const pendingStatusIds = new Set();
   let sessionGeneration = 0;
@@ -553,6 +562,7 @@ export function createAdminPageActivation(options = {}) {
     statusActionGeneration += 1;
     pendingStatusIds.clear();
     statusNotice = '';
+    statusNoticeTone = '';
     try { mutationService?.invalidate?.(); } catch { /* Stale mutation responses remain ignored by the page. */ }
     sessionGeneration += 1;
     monitorEpoch += 1;
@@ -668,6 +678,7 @@ export function createAdminPageActivation(options = {}) {
       elements.status.textContent = 'Draft saved, but the catalog could not be refreshed.';
     } else if (rendered && statusNotice && state.status === ADMIN_CMS_STATUS.READY) {
       elements.status.textContent = statusNotice;
+      elements.status.classList.toggle('is-error', statusNoticeTone === 'error');
     } else if (rendered && statusNotice && state.status === ADMIN_CMS_STATUS.ERROR) {
       elements.status.textContent = `${statusNotice} Catalog refresh is unavailable.`;
     }
@@ -696,6 +707,8 @@ export function createAdminPageActivation(options = {}) {
       || row?.updatedAt !== recipe.updatedAt) return false;
     pendingStatusIds.add(recipe.id);
     savedNotice = false;
+    statusNotice = '';
+    statusNoticeTone = '';
     render(coordinator.getState());
     try {
       const publishing = recipe.status === 'draft';
@@ -722,6 +735,7 @@ export function createAdminPageActivation(options = {}) {
       }
       if (result?.status === ADMIN_RECIPE_MUTATION_STATUS.SUCCESS) {
         statusNotice = publishing ? 'Recipe published.' : 'Recipe unpublished.';
+        statusNoticeTone = 'success';
         const refreshed = await coordinator.refreshRecipes();
         if (stillCurrent() && !refreshed) statusNotice += ' Catalog refresh is unavailable.';
         return refreshed === true && stillCurrent();
@@ -729,12 +743,16 @@ export function createAdminPageActivation(options = {}) {
       statusNotice = result?.status === ADMIN_RECIPE_MUTATION_STATUS.CONFLICT
         ? 'Recipe changed. Refreshing the catalog.'
         : 'Recipe status could not be confirmed. Reload before trying again.';
+      statusNoticeTone = 'error';
       if (result?.status === ADMIN_RECIPE_MUTATION_STATUS.CONFLICT) {
         await coordinator.refreshRecipes();
       }
       return false;
     } catch {
-      if (stillCurrent()) statusNotice = 'Recipe status could not be confirmed. Reload before trying again.';
+      if (stillCurrent()) {
+        statusNotice = 'Recipe status could not be confirmed. Reload before trying again.';
+        statusNoticeTone = 'error';
+      }
       return false;
     } finally {
       if (actionGeneration === statusActionGeneration) pendingStatusIds.delete(recipe.id);
@@ -834,6 +852,7 @@ export function createAdminPageActivation(options = {}) {
             statusActionGeneration += 1;
             pendingStatusIds.clear();
             statusNotice = '';
+            statusNoticeTone = '';
             try { mutationService?.invalidate?.(); } catch { /* Stale responses remain ignored. */ }
             monitorEpoch += 1;
             monitorRequest = null;
@@ -893,6 +912,7 @@ export function createAdminPageActivation(options = {}) {
       statusActionGeneration += 1;
       pendingStatusIds.clear();
       statusNotice = '';
+      statusNoticeTone = '';
       try { mutationService?.cleanup?.(); } catch { /* Page retirement remains terminal. */ }
       for (const lease of [...checkLeases]) lease.retire(null);
       try { documentLike?.removeEventListener?.('visibilitychange', onPageResume); } catch { /* Page retirement remains terminal. */ }
