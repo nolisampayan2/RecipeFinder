@@ -299,9 +299,15 @@ function setActiveNavigation(section) {
 function setSidebarOpen(open) {
   const sidebar = $('#sidebar');
   const menuButton = $('#menu-btn');
-  sidebar.classList.toggle('open', open);
-  menuButton.setAttribute('aria-expanded', String(open));
-  menuButton.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+  const mobile = mobileSidebarQuery.matches;
+  const expanded = mobile && Boolean(open);
+  sidebar.classList.toggle('open', expanded);
+  sidebar.inert = mobile && !expanded;
+  if (sidebar.inert) sidebar.setAttribute('aria-hidden', 'true');
+  else sidebar.removeAttribute('aria-hidden');
+  menuButton.setAttribute('aria-expanded', String(expanded));
+  menuButton.setAttribute('aria-label', expanded ? 'Close menu' : 'Open menu');
+  return expanded;
 }
 
 function closeMobileSidebar({ restoreFocus = false, focusTarget = null } = {}) {
@@ -546,8 +552,24 @@ function initializePageActions() {
 
 function initializeNavigation() {
   setActiveNavigation('home');
+  setSidebarOpen(false);
   $('#menu-btn').addEventListener('click', () => {
-    setSidebarOpen(!$('#sidebar').classList.contains('open'));
+    const opening = !$('#sidebar').classList.contains('open');
+    setSidebarOpen(opening);
+    if (opening) $('#sidebar').querySelector('.nav-link')?.focus();
+    else $('#menu-btn').focus();
+  });
+
+  $('#sidebar').addEventListener('focusout', (event) => {
+    if (mobileSidebarQuery.matches && $('#sidebar').classList.contains('open')
+      && !$('#sidebar').contains(event.relatedTarget)
+      && !$('#menu-btn').contains(event.relatedTarget)) setSidebarOpen(false);
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!mobileSidebarQuery.matches || !$('#sidebar').classList.contains('open')) return;
+    if ($('#sidebar').contains(event.target) || $('#menu-btn').contains(event.target)) return;
+    setSidebarOpen(false);
   });
 
   $$('.nav-link').forEach((link) => {
@@ -585,7 +607,9 @@ function initializeNavigation() {
   });
 
   mobileSidebarQuery.addEventListener('change', (event) => {
-    if (!event.matches) setSidebarOpen(false);
+    const focusWasInSidebar = event.matches && $('#sidebar').contains(document.activeElement);
+    setSidebarOpen(false);
+    if (focusWasInSidebar) $('#menu-btn').focus();
   });
 }
 

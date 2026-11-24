@@ -300,7 +300,21 @@ const fictionalCard = fakeElements.get('#recommended-grid').children[originalDem
 const fictionalDetailButton = fictionalCard.children.at(-1).children.at(-1);
 assert.equal(fictionalDetailButton.dataset.externalView, allPreviewRecipes[0].id);
 assert.equal(fictionalDetailButton.dataset.view, undefined);
+assert.equal(fictionalDetailButton.textContent, 'View Recipe');
 assert.notEqual(fictionalDetailButton.disabled, true, 'Validated fictional details must be available');
+
+favoriteState.view = 'default';
+renderModule.render(recipeCatalog, { status: 'idle', recipes: [], error: null, generation: 0 });
+const compactCard = fakeElements.get('#more-grid').children[0];
+const compactAction = compactCard.children.at(-1).children.at(-1);
+assert.equal(compactAction.dataset.view, recipeCatalog.list()[4].id,
+  'More Recipes cards retain their actual detail action');
+assert.equal(compactAction.attributes['aria-label'], `View recipe for ${recipeCatalog.list()[4].name}`);
+assert.equal(compactAction.textContent, 'View Recipe');
+assert.equal(compactAction.disabled, false);
+const firstFavoriteAction = fakeElements.get('#recommended-grid').children[0].children[1];
+assert.equal(firstFavoriteAction.attributes['aria-label'],
+  `Save ${recipeCatalog.list()[0].name} to favorites`);
 
 const liveRecipe = {
   id: 'external:themealdb:12345', source: 'external', externalProvider: 'themealdb', externalId: '12345',
