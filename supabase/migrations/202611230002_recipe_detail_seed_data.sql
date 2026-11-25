@@ -653,7 +653,8 @@ begin
       or existing_row.fallback_image_url is distinct from target->>'fallback_image_url'
       or existing_row.tutorial_url is distinct from target->>'tutorial_url'
       or existing_row.ingredients is distinct from target->'ingredients'
-      or existing_row.instructions is distinct from target->>'instructions'
+      or pg_catalog.replace(existing_row.instructions, E'\r\n', E'\n')
+        is distinct from target->>'instructions'
       or existing_row.status is distinct from 'published'
       or existing_row.source_type is distinct from target->>'source_type'
       or existing_row.external_provider is distinct from target->>'external_provider'

@@ -38,11 +38,29 @@ assert.match(productionSql, /lock\s+table\s+public\.recipes\s+in\s+share\s+row\s
 assert.match(productionSql, /where\s+not\s+exists\s*\(\s*select\s+1\s+from\s+public\.recipes\s+where\s+id\s*=\s*target->>'id'/i);
 for (const field of [
   'name', 'description', 'category_id', 'cuisine_id', 'image_url', 'fallback_image_url',
-  'tutorial_url', 'ingredients', 'instructions', 'status', 'source_type',
+  'tutorial_url', 'ingredients', 'status', 'source_type',
   'external_provider', 'external_id', 'published_at',
 ]) {
   assert.match(productionSql, new RegExp(`existing_row\\.${field}\\s+is\\s+distinct\\s+from`, 'i'),
     `A changed existing ${field} must abort the transaction.`);
+}
+assert.match(productionSql,
+  /pg_catalog\.replace\(existing_row\.instructions,\s*E'\\r\\n',\s*E'\\n'\)\s+is\s+distinct\s+from\s+target->>'instructions'/i,
+  'Only CRLF instruction line endings may be normalized for existing production rows.');
+assert.doesNotMatch(productionSql, /\bupdate\s+public\.recipes\b/i,
+  'Existing recipe rows must not be rewritten.');
+const normalizeExistingInstructions = (value) => value.replaceAll('\r\n', '\n');
+for (const { instructions } of productionRecipes) {
+  assert.equal(normalizeExistingInstructions(instructions), instructions, 'Exact LF remains valid.');
+  assert.equal(normalizeExistingInstructions(instructions.replaceAll('\n', '\r\n')), instructions,
+    'Equivalent CRLF remains valid without changing the stored row.');
+  assert.equal(normalizeExistingInstructions(instructions.replace('\n', '\r\n')), instructions,
+    'Mixed LF and CRLF remains valid.');
+  assert.notEqual(normalizeExistingInstructions(`${instructions} changed`), instructions);
+  assert.notEqual(normalizeExistingInstructions(instructions.replace('\n', '\r')), instructions,
+    'A standalone carriage return remains invalid.');
+  assert.notEqual(normalizeExistingInstructions(`${instructions} `), instructions,
+    'Arbitrary whitespace remains invalid.');
 }
 assert.match(productionSql, /existing_row\.created_by\s+is\s+not\s+null/i);
 assert.equal((productionSql.match(/\binsert\s+into\s+public\.recipes\b/gi) ?? []).length, 1);
