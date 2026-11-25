@@ -41,7 +41,7 @@ export function resolvePublicSupabaseConfig(environment = {}) {
   }
 }
 
-export function renderPublicSupabaseConfig(config, { adminPreviewAvailable = false } = {}) {
+export function renderPublicSupabaseConfig(config, { adminPreviewAvailable = false, adminProductionAvailable = false } = {}) {
   let validated;
   try {
     validated = validateSupabaseConfig(config);
@@ -57,6 +57,7 @@ export function renderPublicSupabaseConfig(config, { adminPreviewAvailable = fal
     `  publishableKey: ${JSON.stringify(validated.publishableKey)},`,
     '});',
     `export const ADMIN_CMS_PREVIEW_AVAILABLE = ${adminPreviewAvailable === true};`,
+    `export const ADMIN_CMS_PRODUCTION_AVAILABLE = ${adminProductionAvailable === true};`,
     'export const ADMIN_CMS_LOCAL_DEVELOPMENT_AVAILABLE = false;',
     '',
   ].join('\n');

@@ -17,21 +17,25 @@ assert.equal(vercel.buildCommand, 'node scripts/build-option-b-deployment.mjs');
 assert.equal(vercel.outputDirectory, 'dist');
 
 for (const scenario of [
-  { adminPreview: false, environment },
-  { adminPreview: false, environment: { ...environment, ENABLE_ADMIN_CMS_PREVIEW: 'true' } },
-  { adminPreview: true, environment: { ...environment, VERCEL_ENV: 'preview', ENABLE_ADMIN_CMS_PREVIEW: 'true' } },
+  { adminPreview: false, adminProduction: false, environment },
+  { adminPreview: false, adminProduction: false, environment: { ...environment, ENABLE_ADMIN_CMS_PREVIEW: 'true' } },
+  { adminPreview: false, adminProduction: false, environment: { ...environment, ENABLE_ADMIN_CMS_PRODUCTION: 'TRUE' } },
+  { adminPreview: false, adminProduction: false, environment: { ...environment, VERCEL_ENV: 'preview', ENABLE_ADMIN_CMS_PRODUCTION: 'true' } },
+  { adminPreview: false, adminProduction: true, environment: { ...environment, ENABLE_ADMIN_CMS_PRODUCTION: 'true' } },
+  { adminPreview: true, adminProduction: false, environment: { ...environment, VERCEL_ENV: 'preview', ENABLE_ADMIN_CMS_PREVIEW: 'true' } },
 ]) {
-  const { adminPreview } = scenario;
+  const { adminPreview, adminProduction } = scenario;
+  const includeAdmin = adminPreview || adminProduction;
   const parent = await mkdtemp(join(tmpdir(), 'recipefinder-release-build-'));
   try {
     const output = await buildOptionBDeployment({
       environment: scenario.environment,
       outputDirectory: resolve(parent, 'dist'),
     });
-    assert.equal(output.files.length, adminPreview ? 63 : 52);
-    assert.equal(output.files.includes('admin.html'), adminPreview);
-    assert.equal(output.files.includes('js/admin-browser.js'), adminPreview);
-    assert.equal(output.files.includes('js/dashboard-admin-link.js'), adminPreview);
+    assert.equal(output.files.length, includeAdmin ? 63 : 52);
+    assert.equal(output.files.includes('admin.html'), includeAdmin);
+    assert.equal(output.files.includes('js/admin-browser.js'), includeAdmin);
+    assert.equal(output.files.includes('js/dashboard-admin-link.js'), includeAdmin);
     for (const path of [
       'app.js', 'js/data.js', 'js/fictional-external-recipe-source.js',
       'js/supabase-recipe-source.js', 'js/recipe-catalog.js',
@@ -58,8 +62,11 @@ for (const scenario of [
     assert.equal(content.includes('BEGIN PRIVATE KEY'), false);
     const index = await readFile(resolve(output.outputDirectory, 'index.html'), 'utf8');
     assert.match(index, /src="js\/option-b-app\.js"/);
+    assert.match(index, /Search recipes available in RecipeFinder\./);
+    assert.doesNotMatch(index, /fictional offline recipe previews|Offline Recipes/);
     const config = await readFile(resolve(output.outputDirectory, 'js/supabase-config.js'), 'utf8');
     assert.match(config, new RegExp(`ADMIN_CMS_PREVIEW_AVAILABLE = ${adminPreview};`));
+    assert.match(config, new RegExp(`ADMIN_CMS_PRODUCTION_AVAILABLE = ${adminProduction};`));
     assert.equal(config.includes('sb_secret_'), false);
     assert.equal(config.includes('service_role'), false);
   } finally {

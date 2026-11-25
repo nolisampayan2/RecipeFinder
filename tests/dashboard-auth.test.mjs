@@ -13,6 +13,8 @@ for (const hostname of ['example.com', 'admin.localhost', 'localhost.example.com
   assert.equal(shouldInitializeAdminDashboardLink({ adminLocalDevelopmentAvailable: true }, hostname), false);
 }
 assert.equal(shouldInitializeAdminDashboardLink({ adminPreviewAvailable: true }, 'example.com'), true);
+assert.equal(shouldInitializeAdminDashboardLink({ adminProductionAvailable: true }, 'example.com'), true);
+assert.equal(shouldInitializeAdminDashboardLink({ adminProductionAvailable: 'true' }, 'example.com'), false);
 assert.equal(shouldInitializeAdminDashboardLink({ adminPreviewAvailable: 'true' }, 'example.com'), false);
 assert.equal(shouldInitializeAdminDashboardLink({ adminLocalDevelopmentAvailable: 'true' }, 'localhost'), false);
 assert.equal(shouldInitializeAdminDashboardLink({ get adminPreviewAvailable() { throw Error('private'); } }, 'localhost'), false);
@@ -155,16 +157,24 @@ const previewHarness = createIntegration(createFakeClient(), createFakeDocument(
   onClientReady(_client, availability) { previewAvailability.push(availability); },
 });
 assert.equal(await previewHarness.integration.activate(), true);
-assert.deepEqual(previewAvailability, [{ adminPreviewAvailable: true, adminLocalDevelopmentAvailable: false }]);
+assert.deepEqual(previewAvailability, [{ adminPreviewAvailable: true, adminProductionAvailable: false, adminLocalDevelopmentAvailable: false }]);
 assert.equal(Object.isFrozen(previewAvailability[0]), true);
 previewHarness.integration.cleanup();
+const productionAvailability = [];
+const productionHarness = createIntegration(createFakeClient(), createFakeDocument(), {
+  loadConfig: async () => ({ SUPABASE_CONFIG: publicConfig, ADMIN_CMS_PRODUCTION_AVAILABLE: true }),
+  onClientReady(_client, availability) { productionAvailability.push(availability); },
+});
+assert.equal(await productionHarness.integration.activate(), true);
+assert.deepEqual(productionAvailability, [{ adminPreviewAvailable: false, adminProductionAvailable: true, adminLocalDevelopmentAvailable: false }]);
+productionHarness.integration.cleanup();
 const localAvailability = [];
 const localHarness = createIntegration(createFakeClient(), createFakeDocument(), {
   loadConfig: async () => ({ SUPABASE_CONFIG: publicConfig, ADMIN_CMS_LOCAL_DEVELOPMENT_AVAILABLE: true }),
   onClientReady(_client, availability) { localAvailability.push(availability); },
 });
 assert.equal(await localHarness.integration.activate(), true);
-assert.deepEqual(localAvailability, [{ adminPreviewAvailable: false, adminLocalDevelopmentAvailable: true }]);
+assert.deepEqual(localAvailability, [{ adminPreviewAvailable: false, adminProductionAvailable: false, adminLocalDevelopmentAvailable: true }]);
 localHarness.integration.cleanup();
 assert.equal(observedAuthStates.every(Object.isFrozen), true);
 assert.doesNotMatch(JSON.stringify(observedAuthStates), /cook@|never-render|access_token|refresh_token/);

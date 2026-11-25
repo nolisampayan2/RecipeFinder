@@ -3,7 +3,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { buildOptionBCandidate } from './build-option-b-candidate.mjs';
-import { isAdminPreviewBuildEnabled } from './build-vercel-static.mjs';
+import { isAdminPreviewBuildEnabled, isAdminProductionBuildEnabled } from './build-vercel-static.mjs';
 import { resolvePublicSupabaseConfig } from './generate-supabase-config.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -31,6 +31,7 @@ async function outputFiles(directory, prefix = '') {
 export async function buildOptionBDeployment({ environment = process.env, outputDirectory = DEFAULT_OUTPUT } = {}) {
   const publicConfig = resolvePublicSupabaseConfig(environment);
   const adminPreview = isAdminPreviewBuildEnabled(environment);
+  const adminProduction = isAdminProductionBuildEnabled(environment);
   const output = resolve(outputDirectory);
   if (output.split(sep).at(-1) !== 'dist') throw new TypeError('Unsafe build output.');
   await realpath(dirname(output));
@@ -39,7 +40,7 @@ export async function buildOptionBDeployment({ environment = process.env, output
   let candidate;
   let staging;
   try {
-    candidate = await buildOptionBCandidate({ publicConfig, adminPreview });
+    candidate = await buildOptionBCandidate({ publicConfig, adminPreview, adminProduction });
     staging = await mkdtemp(join(parent, '.recipefinder-option-b-build-'));
     for (const path of candidate.files) {
       const destination = resolve(staging, path);

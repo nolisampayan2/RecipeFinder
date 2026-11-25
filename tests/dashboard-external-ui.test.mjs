@@ -147,7 +147,7 @@ assert.match(html, /id="search-source-offline"[^>]+value="offline"[^>]+checked/)
 assert.match(html, /id="search-source-online"[^>]+value="online"/);
 assert.match(html, /<legend>Recipe source<\/legend>/);
 assert.match(html, /Searching TheMealDB sends your search term to an external recipe service\./);
-assert.match(html, /Search built-in recipes and fictional offline recipe previews\./);
+assert.match(html, /Search recipes available in RecipeFinder\./);
 assert.match(html, /Recipe data and images provided by TheMealDB/);
 assert.match(html, /href="https:\/\/www\.themealdb\.com\/"/);
 assert.match(html, /rel="noopener noreferrer"/);

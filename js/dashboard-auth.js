@@ -94,6 +94,7 @@ async function loadLocalPublicConfig() {
 export function shouldInitializeAdminDashboardLink(availability, hostname) {
   try {
     return availability?.adminPreviewAvailable === true
+      || availability?.adminProductionAvailable === true
       || (availability?.adminLocalDevelopmentAvailable === true
         && (hostname === 'localhost' || hostname === '127.0.0.1'));
   } catch {
@@ -232,6 +233,7 @@ export function createDashboardAuthIntegration(options = {}) {
               try {
                 onClientReady(client, Object.freeze({
                   adminPreviewAvailable: configModule?.ADMIN_CMS_PREVIEW_AVAILABLE === true,
+                  adminProductionAvailable: configModule?.ADMIN_CMS_PRODUCTION_AVAILABLE === true,
                   adminLocalDevelopmentAvailable: configModule?.ADMIN_CMS_LOCAL_DEVELOPMENT_AVAILABLE === true,
                 }));
               } catch { /* Additive consumers cannot break Auth. */ }

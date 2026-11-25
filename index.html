@@ -62,11 +62,11 @@
         <div class="search-source-panel">
           <fieldset class="search-source" id="search-source-selector" aria-describedby="search-source-help">
             <legend>Recipe source</legend>
-            <label><input id="search-source-offline" type="radio" name="recipe-source" value="offline" checked><span>Offline Recipes</span></label>
+            <label><input id="search-source-offline" type="radio" name="recipe-source" value="offline" checked><span>RecipeFinder Recipes</span></label>
             <label><input id="search-source-online" type="radio" name="recipe-source" value="online" aria-describedby="online-search-disclosure"><span>Online Recipes</span></label>
           </fieldset>
           <div class="search-source-help" id="search-source-help" aria-live="polite">
-            <p id="offline-search-description">Search built-in recipes and fictional offline recipe previews.</p>
+            <p id="offline-search-description">Search recipes available in RecipeFinder.</p>
             <p id="online-search-disclosure" hidden>Searching TheMealDB sends your search term to an external recipe service.</p>
           </div>
         </div>
@@ -101,8 +101,8 @@
         </section>
 
         <section class="content-section" id="recommended" aria-labelledby="recommended-title" tabindex="-1">
-          <div class="section-heading"><h2 id="recommended-title">🍴 Recommended for you</h2><div class="recipe-view-actions"><button class="back-button" id="back-to-discover" type="button" data-back-to-discover hidden>← Back to Discover</button><button class="back-button discover-more-button" id="discover-more-recipes" type="button" data-discover-more hidden>Discover More Offline Recipes</button><button class="text-button" id="recommended-view-all" data-view-all="recipes">View all →</button></div></div>
-          <div class="external-status" id="external-status" role="status" aria-live="polite" hidden><span aria-hidden="true">&#10022;</span><p id="external-status-message"></p><a id="mealdb-attribution" href="https://www.themealdb.com/" target="_blank" rel="noopener noreferrer" hidden>Recipe data and images provided by TheMealDB</a><button class="text-button" id="external-retry" type="button" data-external-retry hidden>Retry</button><button class="text-button" id="back-to-offline" type="button" data-back-to-offline hidden>Back to Offline Recipes</button></div>
+          <div class="section-heading"><h2 id="recommended-title">🍴 Recommended for you</h2><div class="recipe-view-actions"><button class="back-button" id="back-to-discover" type="button" data-back-to-discover hidden>← Back to Discover</button><button class="back-button discover-more-button" id="discover-more-recipes" type="button" data-discover-more hidden>Discover More RecipeFinder Recipes</button><button class="text-button" id="recommended-view-all" data-view-all="recipes">View all →</button></div></div>
+          <div class="external-status" id="external-status" role="status" aria-live="polite" hidden><span aria-hidden="true">&#10022;</span><p id="external-status-message"></p><a id="mealdb-attribution" href="https://www.themealdb.com/" target="_blank" rel="noopener noreferrer" hidden>Recipe data and images provided by TheMealDB</a><button class="text-button" id="external-retry" type="button" data-external-retry hidden>Retry</button><button class="text-button" id="back-to-offline" type="button" data-back-to-offline hidden>Back to RecipeFinder Recipes</button></div>
           <div class="recipe-grid featured-grid" id="recommended-grid"></div>
           <div class="empty-state" id="empty-state" hidden><span>🥣</span><h3 id="empty-title">No recipes found</h3><p id="empty-message">Try another search or clear your filters.</p><button class="primary" data-clear>Clear filters</button></div>
         </section>

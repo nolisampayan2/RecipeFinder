@@ -299,6 +299,20 @@ export function isAdminPreviewBuildEnabled(environment) {
   }
 }
 
+export function isAdminProductionBuildEnabled(environment) {
+  try {
+    return Boolean(
+      environment
+      && typeof environment === 'object'
+      && !Array.isArray(environment)
+      && environment.VERCEL_ENV === 'production'
+      && environment.ENABLE_ADMIN_CMS_PRODUCTION === 'true'
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function acquireBuildLock(canonicalRoot, filesystem) {
   if (!samePath(dirname(BUILD_LOCK_PATH), PROJECT_ROOT)) throw new TypeError(STATIC_BUILD_ERROR);
   const canonicalParent = await filesystem.realpath(dirname(BUILD_LOCK_PATH));

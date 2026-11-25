@@ -35,7 +35,7 @@ function relativeImport(owner, specifier) {
   return candidate.slice(prefix.length).split(sep).join('/');
 }
 
-async function collectModules(entries, adminPreview) {
+async function collectModules(entries, includeAdmin) {
   const pending = [...entries];
   const files = new Set();
   while (pending.length) {
@@ -47,7 +47,7 @@ async function collectModules(entries, adminPreview) {
     for (const match of source.matchAll(MODULE_RE)) {
       const imported = relativeImport(path, match[1] ?? match[2]);
       if (imported === 'js/supabase-config.js') continue;
-      if (imported === 'js/dashboard-admin-link.js' && !adminPreview) continue;
+      if (imported === 'js/dashboard-admin-link.js' && !includeAdmin) continue;
       pending.push(imported);
     }
   }
@@ -59,11 +59,15 @@ async function collectModules(entries, adminPreview) {
  * or the normal Production/Admin Preview build. The caller supplies browser-
  * safe public config explicitly; there is no environment or secret fallback.
  */
-export async function buildOptionBCandidate({ publicConfig, adminPreview = false } = {}) {
-  const configSource = renderPublicSupabaseConfig(publicConfig, { adminPreviewAvailable: adminPreview === true });
-  const entries = [ROOT_ENTRY, ...AUTH_ENTRIES, ...(adminPreview ? ['js/admin-browser.js', 'js/dashboard-admin-link.js'] : [])];
-  const modules = await collectModules(entries, adminPreview === true);
-  const files = [...ROOT_PAGES, ...ASSETS, ...modules, ...(adminPreview ? ADMIN_FILES : [])].sort();
+export async function buildOptionBCandidate({ publicConfig, adminPreview = false, adminProduction = false } = {}) {
+  const includeAdmin = adminPreview === true || adminProduction === true;
+  const configSource = renderPublicSupabaseConfig(publicConfig, {
+    adminPreviewAvailable: adminPreview === true,
+    adminProductionAvailable: adminProduction === true,
+  });
+  const entries = [ROOT_ENTRY, ...AUTH_ENTRIES, ...(includeAdmin ? ['js/admin-browser.js', 'js/dashboard-admin-link.js'] : [])];
+  const modules = await collectModules(entries, includeAdmin);
+  const files = [...ROOT_PAGES, ...ASSETS, ...modules, ...(includeAdmin ? ADMIN_FILES : [])].sort();
   if (files.some((path, index) => index > 0 && files[index - 1] === path)) throw new TypeError('Candidate inventory is duplicated.');
   const directory = await mkdtemp(join(tmpdir(), 'recipefinder-option-b-'));
   try {

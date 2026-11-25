@@ -56,6 +56,7 @@ for (const adminPreview of [false, true]) {
     assert.match(login, /Sign in to view full RecipeFinder recipe details/);
     const config = await readFile(join(output.directory, 'js/supabase-config.js'), 'utf8');
     assert.match(config, new RegExp(`ADMIN_CMS_PREVIEW_AVAILABLE = ${adminPreview};`));
+    assert.match(config, /ADMIN_CMS_PRODUCTION_AVAILABLE = false;/);
     assert.match(config, /ADMIN_CMS_LOCAL_DEVELOPMENT_AVAILABLE = false;/);
 
     const javascriptFiles = output.files.filter((path) => path.endsWith('.js'));

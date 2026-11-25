@@ -77,6 +77,9 @@ assert.throws(
 
 const rendered = renderPublicSupabaseConfig({ url, publishableKey });
 assert.match(rendered, /ADMIN_CMS_PREVIEW_AVAILABLE = false/);
+assert.match(rendered, /ADMIN_CMS_PRODUCTION_AVAILABLE = false/);
+assert.match(renderPublicSupabaseConfig({ url, publishableKey }, { adminProductionAvailable: true }), /ADMIN_CMS_PRODUCTION_AVAILABLE = true/);
+assert.match(renderPublicSupabaseConfig({ url, publishableKey }, { adminProductionAvailable: 'true' }), /ADMIN_CMS_PRODUCTION_AVAILABLE = false/);
 assert.match(rendered, /ADMIN_CMS_LOCAL_DEVELOPMENT_AVAILABLE = false/);
 assert.match(renderPublicSupabaseConfig({ url, publishableKey }, { adminPreviewAvailable: true }), /ADMIN_CMS_PREVIEW_AVAILABLE = true/);
 assert.match(renderPublicSupabaseConfig({ url, publishableKey }, { adminPreviewAvailable: true }), /ADMIN_CMS_LOCAL_DEVELOPMENT_AVAILABLE = false/);

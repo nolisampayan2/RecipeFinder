@@ -5,7 +5,7 @@ import { createAuthenticatedRecipeDetailService } from './supabase-recipe-detail
 import { createRecipeLoginGate } from './recipe-login-gate.js';
 import { RECIPE_DETAIL_RESULT } from './recipe-detail-access-controller.js';
 import { createOptionBModal } from './option-b-modal.js';
-import { createDashboardAuthIntegration } from './dashboard-auth.js';
+import { createDashboardAuthIntegration, shouldInitializeAdminDashboardLink } from './dashboard-auth.js';
 import { createDashboardAccountFavorites } from './dashboard-account-favorites.js';
 import { createLiveMealDbDashboard } from './live-mealdb-dashboard.js';
 import { initializeCategoryCarousel, toggleCategoriesExpansion } from './category-carousel.js';
@@ -581,7 +581,7 @@ function onClientReady(client, availability) {
   void collectionsController.handleAuthState(authState);
   void accountFavorites.handleAuthState(authState);
   unsubscribeFavorites = accountFavorites.subscribe((next) => { favoriteState = next; render(); });
-  if (availability.adminPreviewAvailable === true) {
+  if (shouldInitializeAdminDashboardLink(availability, globalThis.location?.hostname)) {
     void import('./dashboard-admin-link.js').then(({ createDashboardAdminLink }) => {
       if (retired) return;
       adminLink = createDashboardAdminLink({ link: $('[data-admin-dashboard-link]'), client });
