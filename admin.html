@@ -11,46 +11,121 @@
   <link rel="stylesheet" href="admin.css">
 </head>
 <body>
-  <a class="skip-link" href="#admin-content">Skip to admin content</a>
-  <main class="admin-shell" id="admin-content" data-admin-app data-admin-state="loading" aria-busy="true">
-    <header class="admin-header">
-      <a class="auth-brand" href="index.html" aria-label="RecipeFinder dashboard">
-        <span class="auth-brand-mark" aria-hidden="true">♨</span>
-        <span class="auth-brand-copy"><strong>Recipe<span>Finder</span></strong><small>ADMIN CMS</small></span>
-      </a>
-      <nav class="admin-actions" aria-label="Admin account actions">
-        <a class="secondary-link" href="login.html" data-admin-sign-in hidden>Sign in</a>
-        <button class="secondary-link admin-logout" type="button" data-admin-logout hidden>Sign out</button>
-        <a class="secondary-link" href="index.html">Dashboard</a>
+  <div class="admin-shell" data-admin-app data-admin-state="loading" data-drawer-open="false" aria-busy="true">
+    <aside class="admin-sidebar" id="admin-sidebar" data-admin-sidebar aria-label="Admin menu" aria-hidden="true" inert>
+      <div class="admin-sidebar-heading">
+        <a class="auth-brand" href="index.html" aria-label="RecipeFinder dashboard">
+          <span class="auth-brand-mark" aria-hidden="true">♨</span>
+          <span class="auth-brand-copy"><strong>Recipe<span>Finder</span></strong><small>ADMIN CMS</small></span>
+        </a>
+        <button class="admin-icon-button admin-drawer-close" type="button" data-admin-menu-close aria-label="Close Admin menu">&times;</button>
+      </div>
+      <nav class="admin-navigation" aria-label="Admin navigation">
+        <p class="admin-nav-heading">Workspace</p>
+        <a class="admin-nav-link is-active" href="admin.html" aria-current="page"><span aria-hidden="true">▦</span>Recipe Catalog</a>
+        <a class="admin-nav-link" href="index.html"><span aria-hidden="true">⌂</span>Dashboard</a>
       </nav>
-    </header>
+      <div class="admin-account" aria-label="Admin account actions">
+        <p class="admin-account-label">Account</p>
+        <div class="admin-actions">
+          <a class="secondary-link" href="login.html" data-admin-sign-in hidden>Sign in</a>
+          <button class="secondary-link admin-logout" type="button" data-admin-logout hidden>Sign out</button>
+        </div>
+      </div>
+    </aside>
+    <button class="admin-drawer-backdrop" type="button" data-admin-menu-backdrop aria-label="Close Admin menu" tabindex="-1" hidden></button>
+
+    <div class="admin-workspace" data-admin-workspace>
+      <a class="skip-link" href="#admin-content">Skip to admin content</a>
+      <header class="admin-mobile-header">
+        <div class="admin-mobile-brand" aria-label="RecipeFinder Admin CMS">
+          <span class="auth-brand-mark" aria-hidden="true">♨</span>
+          <span><strong>Recipe<span>Finder</span></strong><small>ADMIN CMS</small></span>
+        </div>
+        <button class="admin-menu-toggle" type="button" data-admin-menu-toggle aria-label="Open Admin menu" aria-expanded="false" aria-controls="admin-sidebar"><span aria-hidden="true">&#9776;</span></button>
+      </header>
+      <main class="admin-main" id="admin-content">
 
     <section class="admin-card" aria-labelledby="admin-title">
       <div class="admin-intro">
         <div>
           <p class="auth-kicker">Secure administration</p>
-          <h1 id="admin-title">Recipe catalog</h1>
-          <p>Review RecipeFinder-owned drafts and published recipes. Editing is not enabled in this phase.</p>
+          <h1 id="admin-title">Admin dashboard</h1>
+          <p>Review recipes, prepare drafts, and manage publication from one workspace.</p>
         </div>
         <p class="admin-status" data-admin-status role="status" aria-live="polite" aria-atomic="true">Checking your session.</p>
       </div>
 
       <div data-admin-content hidden>
-        <div class="admin-toolbar">
-          <label for="admin-search">Search recipes</label>
-          <input id="admin-search" type="search" placeholder="Name, category, cuisine, or status" autocomplete="off" data-admin-search disabled>
+        <section class="admin-overview" aria-labelledby="admin-overview-title">
+          <div class="admin-overview-heading">
+            <div><p class="admin-eyebrow">Catalog snapshot</p><h2 id="admin-overview-title">At a glance</h2></div>
+            <p>Counts reflect loaded recipes before search and status filters, not database-wide totals.</p>
+          </div>
+          <div class="admin-overview-grid">
+            <div class="admin-stat-card admin-stat-total"><span class="admin-stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span class="admin-stat-label">Loaded recipes</span><strong class="admin-stat-value" data-admin-loaded-total>0</strong></div>
+            <div class="admin-stat-card admin-stat-published"><span class="admin-stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg></span><span class="admin-stat-label">Loaded published</span><strong class="admin-stat-value" data-admin-loaded-published>0</strong></div>
+            <div class="admin-stat-card admin-stat-draft"><span class="admin-stat-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M4 17l-1 4 4-1L19 8a2 2 0 0 0-3-3L4 17Z"/></svg></span><span class="admin-stat-label">Loaded drafts</span><strong class="admin-stat-value" data-admin-loaded-drafts>0</strong></div>
+          </div>
+        </section>
+        <div class="admin-toolbar" aria-label="Recipe management tools">
+          <div class="admin-toolbar-heading">
+            <div><p class="admin-eyebrow">Recipe management</p><p class="admin-count" data-admin-count>0 recipes</p></div>
+            <button class="admin-primary-button" type="button" data-admin-create disabled>Create recipe</button>
+          </div>
+          <div class="admin-toolbar-filters">
+            <label class="admin-field" for="admin-search"><span>Search recipes</span><input id="admin-search" type="search" placeholder="Name, category, or cuisine" autocomplete="off" data-admin-search disabled></label>
+            <label class="admin-field" for="admin-status-filter"><span>Status</span><select id="admin-status-filter" data-admin-status-filter disabled><option value="all">All statuses</option><option value="draft">Draft</option><option value="published">Published</option></select></label>
+          </div>
         </div>
         <div class="admin-table-wrap">
           <table>
             <caption class="sr-only">RecipeFinder recipe administration catalog</caption>
-            <thead><tr><th scope="col">Recipe</th><th scope="col">Category</th><th scope="col">Cuisine</th><th scope="col">Status</th></tr></thead>
+            <thead><tr><th id="admin-recipe-column" scope="col">Recipe</th><th id="admin-category-column" scope="col">Category</th><th id="admin-cuisine-column" scope="col">Cuisine</th><th id="admin-status-column" scope="col">Status</th><th id="admin-action-column" scope="col">Actions</th></tr></thead>
             <tbody data-admin-rows></tbody>
           </table>
         </div>
         <p class="admin-empty" data-admin-empty hidden>No recipes are available.</p>
       </div>
     </section>
-  </main>
+
+    <section class="admin-card admin-editor" data-admin-editor hidden aria-labelledby="admin-editor-title">
+      <div class="admin-editor-heading">
+        <div><p class="admin-eyebrow">Draft workspace</p><h2 id="admin-editor-title" data-admin-editor-title>Create recipe draft</h2></div>
+        <button class="admin-icon-button" type="button" data-admin-editor-close aria-label="Close recipe editor">&times;</button>
+      </div>
+      <p class="admin-editor-note">Save a draft for review. Drafts are not visible in the public recipe catalog.</p>
+      <form data-admin-editor-form novalidate>
+        <section class="admin-form-section" aria-labelledby="admin-info-title">
+          <div class="admin-form-section-heading"><h3 id="admin-info-title">Recipe information</h3><p>Name and classify the recipe before adding media and cooking details.</p></div>
+        <div class="admin-form-grid">
+          <label class="admin-field admin-field-wide"><span>Recipe title</span><input name="name" maxlength="160" autocomplete="off" data-editor-field="name" aria-describedby="admin-name-error"><small id="admin-name-error" class="admin-field-error" data-error-for="name"></small></label>
+          <label class="admin-field admin-field-wide"><span>Description</span><textarea name="description" rows="3" data-editor-field="description" aria-describedby="admin-description-error"></textarea><small id="admin-description-error" class="admin-field-error" data-error-for="description"></small></label>
+          <label class="admin-field"><span>Category</span><select name="categoryId" data-editor-field="categoryId" aria-describedby="admin-category-error"><option value="">Select category</option></select><small id="admin-category-error" class="admin-field-error" data-error-for="categoryId"></small></label>
+          <label class="admin-field"><span>Cuisine</span><select name="cuisineId" data-editor-field="cuisineId" aria-describedby="admin-cuisine-error"><option value="">Select cuisine</option></select><small id="admin-cuisine-error" class="admin-field-error" data-error-for="cuisineId"></small></label>
+        </div>
+        </section>
+        <section class="admin-form-section" aria-labelledby="admin-media-title">
+          <div class="admin-form-section-heading"><h3 id="admin-media-title">Images and media</h3><p>Paste image URLs. Add a tutorial link only when one is available.</p></div>
+        <div class="admin-form-grid">
+          <label class="admin-field admin-field-wide"><span>Main image URL</span><input name="imageUrl" type="url" inputmode="url" placeholder="https://example.com/recipe.jpg" data-editor-field="imageUrl" aria-describedby="admin-image-hint admin-image-error"><small id="admin-image-hint" class="admin-field-hint">Use an absolute HTTP or HTTPS image URL.</small><small id="admin-image-error" class="admin-field-error" data-error-for="imageUrl"></small></label>
+          <label class="admin-field"><span>Fallback image URL <em>Optional</em></span><input name="fallbackImageUrl" type="url" inputmode="url" data-editor-field="fallbackImageUrl" aria-describedby="admin-fallback-error"><small id="admin-fallback-error" class="admin-field-error" data-error-for="fallbackImageUrl"></small></label>
+          <label class="admin-field"><span>Tutorial URL <em>Optional</em></span><input name="tutorialUrl" type="url" inputmode="url" placeholder="https://example.com/tutorial" data-editor-field="tutorialUrl" aria-describedby="admin-tutorial-hint admin-tutorial-error"><small id="admin-tutorial-hint" class="admin-field-hint">Use an HTTPS URL.</small><small id="admin-tutorial-error" class="admin-field-error" data-error-for="tutorialUrl"></small></label>
+        </div>
+        </section>
+        <fieldset class="admin-ingredients admin-form-section"><legend>Ingredients</legend><p class="admin-section-help">Add each ingredient with its measurement, such as Rice and 1 cup.</p><div data-editor-ingredients></div><button class="admin-secondary-button" type="button" data-editor-add-ingredient>Add ingredient</button><small class="admin-field-error" data-error-for="ingredients"></small></fieldset>
+        <section class="admin-form-section" aria-labelledby="admin-instructions-title">
+          <div class="admin-form-section-heading"><h3 id="admin-instructions-title">Cooking instructions</h3><p>Describe the steps in the order they should be followed.</p></div>
+          <label class="admin-field"><span>Instructions</span><textarea name="instructions" rows="7" data-editor-field="instructions" aria-describedby="admin-instructions-error"></textarea><small id="admin-instructions-error" class="admin-field-error" data-error-for="instructions"></small></label>
+        </section>
+        <small class="admin-field-error" data-error-for="form"></small>
+        <p class="admin-editor-status" data-admin-editor-status role="status" aria-live="polite" aria-atomic="true"></p>
+        <div class="admin-editor-actions"><button class="admin-secondary-button" type="button" data-admin-editor-cancel>Cancel</button><button class="admin-primary-button" type="submit" data-admin-editor-save>Save draft</button></div>
+      </form>
+    </section>
+      </main>
+    </div>
+  </div>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js" integrity="sha384-TcHRA3zBbn+Lexh5n+Oil4guNPOS3rjNDpGRAN46u/s/mB2IZ50ceC6TYDU2yvgK" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script type="module" src="js/admin-browser.js"></script>
 </body>

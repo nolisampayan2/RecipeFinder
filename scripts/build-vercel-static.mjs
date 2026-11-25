@@ -85,9 +85,28 @@ export const STATIC_RUNTIME_FILES = Object.freeze([
   ...PUBLIC_JAVASCRIPT_FILES,
 ]);
 
+export const ADMIN_PREVIEW_FILES = Object.freeze([
+  'admin.html',
+  'admin.css',
+  'js/admin-browser.js',
+  'js/dashboard-admin-link.js',
+  'js/admin-cms.js',
+  'js/admin-recipe-editor.js',
+  'js/admin-recipe-validation.js',
+  'js/supabase-admin-access.js',
+  'js/supabase-admin-recipes.js',
+  'js/supabase-admin-recipe-mutations.js',
+  'js/supabase-admin-taxonomies.js',
+]);
+
 export const GENERATED_CONFIG_FILE = 'js/supabase-config.js';
 export const PRODUCTION_OUTPUT_FILES = Object.freeze([
   ...STATIC_RUNTIME_FILES,
+  GENERATED_CONFIG_FILE,
+].sort());
+export const ADMIN_PREVIEW_OUTPUT_FILES = Object.freeze([
+  ...STATIC_RUNTIME_FILES,
+  ...ADMIN_PREVIEW_FILES,
   GENERATED_CONFIG_FILE,
 ].sort());
 
@@ -266,6 +285,20 @@ function sameInventory(actual, expected) {
     && actual.every((value, index) => value === expected[index]);
 }
 
+export function isAdminPreviewBuildEnabled(environment) {
+  try {
+    return Boolean(
+      environment
+      && typeof environment === 'object'
+      && !Array.isArray(environment)
+      && environment.VERCEL_ENV === 'preview'
+      && environment.ENABLE_ADMIN_CMS_PREVIEW === 'true'
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function acquireBuildLock(canonicalRoot, filesystem) {
   if (!samePath(dirname(BUILD_LOCK_PATH), PROJECT_ROOT)) throw new TypeError(STATIC_BUILD_ERROR);
   const canonicalParent = await filesystem.realpath(dirname(BUILD_LOCK_PATH));
@@ -311,6 +344,13 @@ async function releaseBuildLock(lock, filesystem) {
 async function buildVercelStaticSiteInternal(options) {
   const { environment, filesystem } = requireBuildOptions(options);
   const canonicalRoot = await canonicalProjectRoot(filesystem);
+  const adminPreviewEnabled = isAdminPreviewBuildEnabled(environment);
+  const runtimeFiles = adminPreviewEnabled
+    ? Object.freeze([...STATIC_RUNTIME_FILES, ...ADMIN_PREVIEW_FILES])
+    : STATIC_RUNTIME_FILES;
+  const expectedOutputFiles = adminPreviewEnabled
+    ? ADMIN_PREVIEW_OUTPUT_FILES
+    : PRODUCTION_OUTPUT_FILES;
   let lock = null;
 
   try {
@@ -327,19 +367,20 @@ async function buildVercelStaticSiteInternal(options) {
       filesystem,
     );
 
-    for (const relativePath of STATIC_RUNTIME_FILES) {
+    for (const relativePath of runtimeFiles) {
       await copyAllowlistedFile(relativePath, DEFAULT_TEMPORARY_DIRECTORY, canonicalRoot, filesystem);
     }
 
     await filesystem.mkdir(resolve(DEFAULT_TEMPORARY_DIRECTORY, 'js'), { recursive: true });
     await generatePublicSupabaseConfig({
       environment,
+      adminPreviewAvailable: adminPreviewEnabled,
       outputPath: resolve(DEFAULT_TEMPORARY_DIRECTORY, GENERATED_CONFIG_FILE),
       writeFileImpl: filesystem.writeFile,
     });
 
     const inventory = (await listOutputFiles(DEFAULT_TEMPORARY_DIRECTORY, filesystem)).sort();
-    if (!sameInventory(inventory, PRODUCTION_OUTPUT_FILES)) throw new TypeError(STATIC_BUILD_ERROR);
+    if (!sameInventory(inventory, expectedOutputFiles)) throw new TypeError(STATIC_BUILD_ERROR);
 
     await filesystem.rename(DEFAULT_TEMPORARY_DIRECTORY, DEFAULT_OUTPUT_DIRECTORY);
     await inspectBuildTarget(DEFAULT_OUTPUT_DIRECTORY, 'dist', canonicalRoot, filesystem);

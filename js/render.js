@@ -99,7 +99,9 @@ function recipeCard(recipe, favorites) {
     if (!favoriteDisabled) favoriteActionIds.set(heart, recipe.id);
     heart.disabled = favoriteDisabled;
     heart.setAttribute('aria-disabled', String(favoriteDisabled));
-    heart.setAttribute('aria-label', `${saved ? 'Remove from' : 'Save to'} favorites`);
+    heart.setAttribute('aria-label', saved
+      ? `Remove ${recipe.name} from favorites`
+      : `Save ${recipe.name} to favorites`);
     card.append(heart);
   }
 
@@ -112,7 +114,7 @@ function recipeCard(recipe, favorites) {
     : isExternal ? 'Recipe details are reserved for a later offline preview.' : '');
   body.append(tags, createElement('h3', '', recipe.name), createElement('p', '', description));
 
-  const viewButton = createElement('button', 'view-btn', 'View recipe →');
+  const viewButton = createElement('button', 'view-btn', 'View Recipe');
   viewButton.type = 'button';
   if (hasOfflineDetails || hasLiveDetails) {
     viewButton.dataset.externalView = recipe.id;
@@ -123,6 +125,7 @@ function recipeCard(recipe, favorites) {
     viewButton.setAttribute('aria-label', `${recipe.name} details are not available${isLiveMealDb ? ' for this live result' : ' in this preview'}`);
   } else {
     viewButton.dataset.view = recipe.id;
+    viewButton.setAttribute('aria-label', `View recipe for ${recipe.name}`);
   }
   body.append(viewButton);
   card.append(body);

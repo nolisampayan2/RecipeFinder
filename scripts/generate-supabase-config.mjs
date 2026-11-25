@@ -41,7 +41,7 @@ export function resolvePublicSupabaseConfig(environment = {}) {
   }
 }
 
-export function renderPublicSupabaseConfig(config) {
+export function renderPublicSupabaseConfig(config, { adminPreviewAvailable = false } = {}) {
   let validated;
   try {
     validated = validateSupabaseConfig(config);
@@ -56,6 +56,8 @@ export function renderPublicSupabaseConfig(config) {
     `  url: ${JSON.stringify(validated.url)},`,
     `  publishableKey: ${JSON.stringify(validated.publishableKey)},`,
     '});',
+    `export const ADMIN_CMS_PREVIEW_AVAILABLE = ${adminPreviewAvailable === true};`,
+    'export const ADMIN_CMS_LOCAL_DEVELOPMENT_AVAILABLE = false;',
     '',
   ].join('\n');
 }
@@ -64,11 +66,12 @@ export async function generatePublicSupabaseConfig({
   environment = process.env,
   outputPath = GENERATED_CONFIG_PATH,
   writeFileImpl = writeFile,
+  adminPreviewAvailable = false,
 } = {}) {
   if (typeof writeFileImpl !== 'function') throw new TypeError(CONFIG_GENERATION_ERROR);
 
   const config = resolvePublicSupabaseConfig(environment);
-  const source = renderPublicSupabaseConfig(config);
+  const source = renderPublicSupabaseConfig(config, { adminPreviewAvailable });
 
   try {
     await writeFileImpl(outputPath, source, {

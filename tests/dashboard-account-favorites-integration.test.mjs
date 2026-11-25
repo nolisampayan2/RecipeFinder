@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { shouldInitializeAdminDashboardLink } from '../js/dashboard-auth.js';
 
 const app = await readFile(new URL('../app.js', import.meta.url), 'utf8');
 const html = await readFile(new URL('../index.html', import.meta.url), 'utf8');
@@ -87,12 +88,14 @@ function createLifecycleHarness() {
 
   const factory = Function(
     'createDashboardAccountFavorites', 'createDashboardRecipeCatalogLoader', 'state', 'renders', 'dashboardAuth',
+    'shouldInitializeAdminDashboardLink',
     'publishAdapterState',
     `${extractFunction('acceptDashboardClient')}
      ${extractFunction('acceptDashboardAuthState')}
      let dashboardAccountFavorites = null;
      let unsubscribeAccountFavorites = null;
      let recipeCatalogLoader = null;
+      let dashboardAdminLink = null;
      let latestAuthState = Object.freeze({ status: 'loading', userId: null });
      let favoritesPresentation = Object.freeze({
        mode: 'account-loading', favoriteIds: Object.freeze([]), pendingRecipeIds: Object.freeze([]), message: 'Loading account favorites.',
@@ -118,6 +121,7 @@ function createLifecycleHarness() {
     { favorites: new Set(guestIds) },
     renders,
     { cleanup() { authCleanups += 1; return true; } },
+    shouldInitializeAdminDashboardLink,
     (next) => adapterListener?.(next),
   );
 

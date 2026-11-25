@@ -16,14 +16,14 @@ export const DASHBOARD_AUTH_MESSAGE = Object.freeze({
 
 function safeIdentity(user) {
   try {
-    const email = user?.email;
+    const name = user?.displayName;
     if (
-      typeof email === 'string'
-      && email === email.trim()
-      && email.length > 0
-      && email.length <= 254
-      && !/[\u0000-\u001f\u007f]/.test(email)
-    ) return email;
+      typeof name === 'string'
+      && name === name.trim()
+      && name.length > 0
+      && name.length <= 80
+      && !/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(name)
+    ) return name;
   } catch {
     // Hostile or malformed identity data stays private.
   }
@@ -89,6 +89,16 @@ function renderDashboardAuth(elements, state) {
 
 async function loadLocalPublicConfig() {
   return import('./supabase-config.js');
+}
+
+export function shouldInitializeAdminDashboardLink(availability, hostname) {
+  try {
+    return availability?.adminPreviewAvailable === true
+      || (availability?.adminLocalDevelopmentAvailable === true
+        && (hostname === 'localhost' || hostname === '127.0.0.1'));
+  } catch {
+    return false;
+  }
 }
 
 /** Owns one dashboard Auth lifecycle; recipe discovery remains independent. */
@@ -165,7 +175,10 @@ export function createDashboardAuthIntegration(options = {}) {
     if (retired || !service) return Promise.resolve(false);
     if (!logoutPromise) {
       const logoutGeneration = generation;
-      const attempt = Promise.resolve().then(async () => {
+      let settle;
+      const attempt = new Promise((resolve) => { settle = resolve; });
+      logoutPromise = attempt;
+      void (async () => {
         try {
           const nextState = await service.logout();
           return Boolean(
@@ -179,8 +192,7 @@ export function createDashboardAuthIntegration(options = {}) {
           }
           return false;
         }
-      });
-      logoutPromise = attempt;
+      })().then(settle, () => settle(false));
       void attempt.then(() => {
         if (logoutPromise === attempt) logoutPromise = null;
       });
@@ -217,7 +229,12 @@ export function createDashboardAuthIntegration(options = {}) {
             if (retired || activationGeneration !== generation) return false;
             if (!clientReadyNotified && typeof onClientReady === 'function') {
               clientReadyNotified = true;
-              try { onClientReady(client); } catch { /* Additive consumers cannot break Auth. */ }
+              try {
+                onClientReady(client, Object.freeze({
+                  adminPreviewAvailable: configModule?.ADMIN_CMS_PREVIEW_AVAILABLE === true,
+                  adminLocalDevelopmentAvailable: configModule?.ADMIN_CMS_LOCAL_DEVELOPMENT_AVAILABLE === true,
+                }));
+              } catch { /* Additive consumers cannot break Auth. */ }
             }
             service = createSessionService(client);
             unsubscribe = service.subscribe((state) => publish(state, activationGeneration));

@@ -20,7 +20,7 @@ import { initializeCategoryCarousel, toggleCategoriesExpansion } from './js/cate
 import { createFictionalExternalRecipeController } from './js/fictional-external-recipe-source.js';
 import { createExternalSourceRegistry } from './js/external-source-registry.js';
 import { createLiveMealDbDashboard } from './js/live-mealdb-dashboard.js';
-import { createDashboardAuthIntegration } from './js/dashboard-auth.js';
+import { createDashboardAuthIntegration, shouldInitializeAdminDashboardLink } from './js/dashboard-auth.js';
 import { createDashboardAccountFavorites } from './js/dashboard-account-favorites.js';
 import { createDashboardRecipeCatalogLoader } from './js/dashboard-recipe-catalog-loader.js';
 
@@ -40,6 +40,7 @@ let liveDashboard = null;
 let recipeMode = 'offline';
 let searchSource = 'offline';
 let dashboardAuth = null;
+let dashboardAdminLink = null;
 let recipeCatalogLoader = null;
 let dashboardAccountFavorites = null;
 let unsubscribeAccountFavorites = null;
@@ -163,7 +164,16 @@ function applyPrimaryCatalogResult(result) {
   }
 }
 
-function acceptDashboardClient(client) {
+function acceptDashboardClient(client, availability) {
+  if (!pageRetired && shouldInitializeAdminDashboardLink(availability, globalThis.location?.hostname)) {
+    void import('./js/dashboard-admin-link.js').then(({ createDashboardAdminLink }) => {
+      if (pageRetired) return;
+      const link = $('[data-admin-dashboard-link]');
+      if (!link) return;
+      dashboardAdminLink = createDashboardAdminLink({ link, client });
+      void dashboardAdminLink.handleAuthState(latestAuthState);
+    }).catch(() => { /* Preview navigation remains hidden when unavailable. */ });
+  }
   if (pageRetired || recipeCatalogLoader) return false;
   try {
     dashboardAccountFavorites = createDashboardAccountFavorites({
@@ -192,6 +202,7 @@ function acceptDashboardClient(client) {
 function acceptDashboardAuthState(authState) {
   if (pageRetired) return false;
   latestAuthState = authState;
+  if (dashboardAdminLink) void dashboardAdminLink.handleAuthState(authState);
   if (!dashboardAccountFavorites) {
     if (authState?.status === 'guest') {
       favoritesPresentation = Object.freeze({
@@ -288,9 +299,15 @@ function setActiveNavigation(section) {
 function setSidebarOpen(open) {
   const sidebar = $('#sidebar');
   const menuButton = $('#menu-btn');
-  sidebar.classList.toggle('open', open);
-  menuButton.setAttribute('aria-expanded', String(open));
-  menuButton.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+  const mobile = mobileSidebarQuery.matches;
+  const expanded = mobile && Boolean(open);
+  sidebar.classList.toggle('open', expanded);
+  sidebar.inert = mobile && !expanded;
+  if (sidebar.inert) sidebar.setAttribute('aria-hidden', 'true');
+  else sidebar.removeAttribute('aria-hidden');
+  menuButton.setAttribute('aria-expanded', String(expanded));
+  menuButton.setAttribute('aria-label', expanded ? 'Close menu' : 'Open menu');
+  return expanded;
 }
 
 function closeMobileSidebar({ restoreFocus = false, focusTarget = null } = {}) {
@@ -535,8 +552,24 @@ function initializePageActions() {
 
 function initializeNavigation() {
   setActiveNavigation('home');
+  setSidebarOpen(false);
   $('#menu-btn').addEventListener('click', () => {
-    setSidebarOpen(!$('#sidebar').classList.contains('open'));
+    const opening = !$('#sidebar').classList.contains('open');
+    setSidebarOpen(opening);
+    if (opening) $('#sidebar').querySelector('.nav-link')?.focus();
+    else $('#menu-btn').focus();
+  });
+
+  $('#sidebar').addEventListener('focusout', (event) => {
+    if (mobileSidebarQuery.matches && $('#sidebar').classList.contains('open')
+      && !$('#sidebar').contains(event.relatedTarget)
+      && !$('#menu-btn').contains(event.relatedTarget)) setSidebarOpen(false);
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!mobileSidebarQuery.matches || !$('#sidebar').classList.contains('open')) return;
+    if ($('#sidebar').contains(event.target) || $('#menu-btn').contains(event.target)) return;
+    setSidebarOpen(false);
   });
 
   $$('.nav-link').forEach((link) => {
@@ -574,7 +607,9 @@ function initializeNavigation() {
   });
 
   mobileSidebarQuery.addEventListener('change', (event) => {
-    if (!event.matches) setSidebarOpen(false);
+    const focusWasInSidebar = event.matches && $('#sidebar').contains(document.activeElement);
+    setSidebarOpen(false);
+    if (focusWasInSidebar) $('#menu-btn').focus();
   });
 }
 
@@ -609,5 +644,6 @@ window.addEventListener('pagehide', () => {
   unsubscribeAccountFavorites = null;
   dashboardAccountFavorites?.cleanup();
   recipeCatalogLoader?.cleanup();
+  dashboardAdminLink?.cleanup();
   dashboardAuth?.cleanup();
 }, { once: true });
