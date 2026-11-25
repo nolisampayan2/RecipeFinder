@@ -587,7 +587,7 @@ for (const environment of [
 
 const vercelConfig = JSON.parse(await realFilesystem.readFile(resolve(SOURCE_ROOT, 'vercel.json'), 'utf8'));
 assert.equal(vercelConfig.framework, null);
-assert.equal(vercelConfig.buildCommand, 'node scripts/build-vercel-static.mjs');
+assert.equal(vercelConfig.buildCommand, 'node scripts/build-option-b-deployment.mjs');
 assert.equal(vercelConfig.outputDirectory, 'dist');
 assert.equal(vercelConfig.cleanUrls, false);
 assert.equal(vercelConfig.trailingSlash, false);

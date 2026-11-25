@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createRecipePreviewSession } from '../js/recipe-preview-session.js';
-import { BUILT_IN_RECIPE_PREVIEWS, FICTIONAL_RECIPE_PREVIEWS } from '../js/recipe-previews.js';
+import { BUILT_IN_RECIPE_PREVIEWS } from '../js/recipe-previews.js';
+import { FICTIONAL_RECIPE_PREVIEWS } from './fixtures/fictional-recipe-previews.mjs';
 import { RECIPE_DETAIL_RESULT } from '../js/recipe-detail-access-controller.js';
 import { PRODUCTION_OUTPUT_FILES, ADMIN_PREVIEW_OUTPUT_FILES } from '../scripts/build-vercel-static.mjs';
 

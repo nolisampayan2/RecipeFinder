@@ -1,4 +1,4 @@
-import { normalizePublishedRecipeRow } from './supabase-recipe-source.js';
+import { normalizePublishedRecipeRow } from './recipe-detail-normalize.js';
 import { isValidAccountUserId, isValidFavoriteRecipeId } from './supabase-favorites.js';
 
 const FICTIONAL_RECIPE_ID = /^external:fictional-offline:(\d+)$/;

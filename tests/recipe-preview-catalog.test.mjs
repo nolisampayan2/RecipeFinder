@@ -3,10 +3,8 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import {
-  BUILT_IN_RECIPE_PREVIEWS,
-  FICTIONAL_RECIPE_PREVIEWS,
-} from '../js/recipe-previews.js';
+import { BUILT_IN_RECIPE_PREVIEWS } from '../js/recipe-previews.js';
+import { FICTIONAL_RECIPE_PREVIEWS } from './fixtures/fictional-recipe-previews.mjs';
 import { createRecipePreviewCatalog } from '../js/recipe-preview-catalog.js';
 import { createPublishedRecipePreviewService } from '../js/supabase-recipe-previews.js';
 import {

@@ -3,7 +3,8 @@ import { readFile } from 'node:fs/promises';
 
 import { adaptDashboardPreviewCatalogResult } from '../js/dashboard-preview-catalog-adapter.js';
 import { createRecipePreviewCatalog } from '../js/recipe-preview-catalog.js';
-import { BUILT_IN_RECIPE_PREVIEWS, FICTIONAL_RECIPE_PREVIEWS } from '../js/recipe-previews.js';
+import { BUILT_IN_RECIPE_PREVIEWS } from '../js/recipe-previews.js';
+import { FICTIONAL_RECIPE_PREVIEWS } from './fixtures/fictional-recipe-previews.mjs';
 import { ADMIN_PREVIEW_OUTPUT_FILES, PRODUCTION_OUTPUT_FILES } from '../scripts/build-vercel-static.mjs';
 
 const cms = Object.freeze({

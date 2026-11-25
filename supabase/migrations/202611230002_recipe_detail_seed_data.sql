@@ -1,4 +1,6 @@
--- Conditional Option B cutover draft. Apply only if version 002 is verified unapplied.
+-- Production-only Option B cutover. Apply only if version 002 is verified unapplied.
+-- The separately archived testing variant contains six fictional recipes and
+-- must never be run on production. Do not execute both variants in one project.
 -- Migration 001, effective role privileges, and the compatible frontend require
 -- separate runtime verification. Never auto-apply this draft to an unknown target.
 -- Restriction and recipe insertion commit together; static tests are not runtime proof.
@@ -584,211 +586,30 @@ declare
     "external_provider": null,
     "external_id": null,
     "published_at": "2026-10-27T00:00:00Z"
-  },
-  {
-    "id": "external:fictional-offline:990001",
-    "name": "Aurora Garden Couscous",
-    "description": "A fictional offline couscous preview with roasted vegetables and herbs.",
-    "category_slug": "vegetarian",
-    "category": "Vegetarian",
-    "cuisine_slug": "mediterranean",
-    "cuisine": "Mediterranean",
-    "image_url": "assets/recipefinder-favicon.svg",
-    "fallback_image_url": "assets/recipefinder-favicon.svg",
-    "tutorial_url": null,
-    "ingredients": [
-      {
-        "name": "Couscous",
-        "measurement": "1 cup"
-      },
-      {
-        "name": "Roasted vegetables",
-        "measurement": "2 cups"
-      },
-      {
-        "name": "Fresh herbs",
-        "measurement": "1 handful"
-      }
-    ],
-    "instructions": "Prepare the couscous, fold in the vegetables, and finish with herbs.",
-    "status": "published",
-    "source_type": "external",
-    "external_provider": "fictional-offline",
-    "external_id": "990001",
-    "published_at": "2026-11-23T00:00:00Z"
-  },
-  {
-    "id": "external:fictional-offline:990002",
-    "name": "Midnight Citrus Noodles",
-    "description": "A fictional offline noodle preview brightened with citrus and sesame.",
-    "category_slug": "pasta",
-    "category": "Pasta",
-    "cuisine_slug": "japanese",
-    "cuisine": "Japanese",
-    "image_url": "assets/recipefinder-favicon.svg",
-    "fallback_image_url": "assets/recipefinder-favicon.svg",
-    "tutorial_url": null,
-    "ingredients": [
-      {
-        "name": "Noodles",
-        "measurement": "250 g"
-      },
-      {
-        "name": "Citrus juice",
-        "measurement": "3 tbsp"
-      },
-      {
-        "name": "Sesame",
-        "measurement": "1 tbsp"
-      }
-    ],
-    "instructions": "Cook the noodles, toss with citrus dressing, and sprinkle with sesame.",
-    "status": "published",
-    "source_type": "external",
-    "external_provider": "fictional-offline",
-    "external_id": "990002",
-    "published_at": "2026-11-23T00:00:00Z"
-  },
-  {
-    "id": "external:fictional-offline:990003",
-    "name": "Ember Lime Chicken",
-    "description": "A fictional offline chicken preview with charred lime and mild spices.",
-    "category_slug": "chicken",
-    "category": "Chicken",
-    "cuisine_slug": "mexican",
-    "cuisine": "Mexican",
-    "image_url": "assets/recipefinder-favicon.svg",
-    "fallback_image_url": "assets/recipefinder-favicon.svg",
-    "tutorial_url": null,
-    "ingredients": [
-      {
-        "name": "Chicken",
-        "measurement": "500 g"
-      },
-      {
-        "name": "Lime",
-        "measurement": "2"
-      },
-      {
-        "name": "Mild spices",
-        "measurement": "2 tsp"
-      }
-    ],
-    "instructions": "Season the chicken, grill until cooked, and finish with lime.",
-    "status": "published",
-    "source_type": "external",
-    "external_provider": "fictional-offline",
-    "external_id": "990003",
-    "published_at": "2026-11-23T00:00:00Z"
-  },
-  {
-    "id": "external:fictional-offline:990004",
-    "name": "Cocoa Pear Tart",
-    "description": "A fictional offline tart preview pairing cocoa pastry with ripe pear.",
-    "category_slug": "dessert",
-    "category": "Dessert",
-    "cuisine_slug": "french",
-    "cuisine": "French",
-    "image_url": "assets/recipefinder-favicon.svg",
-    "fallback_image_url": "assets/recipefinder-favicon.svg",
-    "tutorial_url": null,
-    "ingredients": [
-      {
-        "name": "Pear",
-        "measurement": "2"
-      },
-      {
-        "name": "Cocoa pastry",
-        "measurement": "1 shell"
-      },
-      {
-        "name": "Vanilla",
-        "measurement": "1 tsp"
-      }
-    ],
-    "instructions": "Arrange pears in the pastry shell and bake until tender.",
-    "status": "published",
-    "source_type": "external",
-    "external_provider": "fictional-offline",
-    "external_id": "990004",
-    "published_at": "2026-11-23T00:00:00Z"
-  },
-  {
-    "id": "external:fictional-offline:990005",
-    "name": "Coastal Sesame Rice Bowl",
-    "description": "A fictional offline seafood bowl preview with rice and sesame greens.",
-    "category_slug": "seafood",
-    "category": "Seafood",
-    "cuisine_slug": "american",
-    "cuisine": "American",
-    "image_url": "assets/recipefinder-favicon.svg",
-    "fallback_image_url": "assets/recipefinder-favicon.svg",
-    "tutorial_url": null,
-    "ingredients": [
-      {
-        "name": "White fish",
-        "measurement": "300 g"
-      },
-      {
-        "name": "Rice",
-        "measurement": "2 cups"
-      },
-      {
-        "name": "Sesame greens",
-        "measurement": "1 cup"
-      }
-    ],
-    "instructions": "Cook the fish, arrange over rice, and add sesame greens.",
-    "status": "published",
-    "source_type": "external",
-    "external_provider": "fictional-offline",
-    "external_id": "990005",
-    "published_at": "2026-11-23T00:00:00Z"
-  },
-  {
-    "id": "external:fictional-offline:990006",
-    "name": "Sunrise Tomato Toast",
-    "description": "A fictional offline breakfast preview with tomatoes and crisp toast.",
-    "category_slug": "breakfast",
-    "category": "Breakfast",
-    "cuisine_slug": "italian",
-    "cuisine": "Italian",
-    "image_url": "assets/recipefinder-favicon.svg",
-    "fallback_image_url": "assets/recipefinder-favicon.svg",
-    "tutorial_url": null,
-    "ingredients": [
-      {
-        "name": "Bread",
-        "measurement": "4 slices"
-      },
-      {
-        "name": "Tomatoes",
-        "measurement": "3"
-      },
-      {
-        "name": "Basil",
-        "measurement": "1 handful"
-      }
-    ],
-    "instructions": "Toast the bread and top with seasoned tomatoes and basil.",
-    "status": "published",
-    "source_type": "external",
-    "external_provider": "fictional-offline",
-    "external_id": "990006",
-    "published_at": "2026-11-23T00:00:00Z"
-  }
-]$recipes$::jsonb;
+  }]$recipes$::jsonb;
   target jsonb;
   category_row public.recipe_categories%rowtype;
   cuisine_row public.cuisines%rowtype;
   existing_row public.recipes%rowtype;
-  conflicting_id text;
 begin
-  if pg_catalog.jsonb_array_length(expected) <> 16 then
+  if pg_catalog.jsonb_array_length(expected) <> 10 then
     raise exception 'Recipe inventory count is invalid';
   end if;
 
+  if exists (
+    select 1 from public.recipes
+    where external_provider = 'fictional-offline'
+       or id like 'external:fictional-offline:%'
+  ) then
+    raise exception 'Fictional test recipes already exist; inspect before production cutover';
+  end if;
+
   for target in select value from pg_catalog.jsonb_array_elements(expected) loop
+    if target->>'source_type' is distinct from 'seed'
+      or target->>'external_provider' is not null
+      or target->>'external_id' is not null then
+      raise exception 'Production recipe provenance is invalid';
+    end if;
     select * into category_row
     from public.recipe_categories
     where slug = target->>'category_slug'
@@ -805,18 +626,6 @@ begin
     if not found or cuisine_row.is_active is distinct from true
       or cuisine_row.name is distinct from target->>'cuisine' then
       raise exception 'Required active cuisine is missing or incompatible for %', target->>'id';
-    end if;
-
-    if target->>'source_type' = 'external' then
-      conflicting_id := null;
-      select id into conflicting_id
-      from public.recipes
-      where external_provider = target->>'external_provider'
-        and external_id = target->>'external_id'
-      for update;
-      if found and conflicting_id is distinct from target->>'id' then
-        raise exception 'Conflicting fictional external identity for %', target->>'id';
-      end if;
     end if;
 
     insert into public.recipes (

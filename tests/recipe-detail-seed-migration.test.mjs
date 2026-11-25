@@ -3,19 +3,54 @@ import { readFile } from 'node:fs/promises';
 
 import { recipes as builtInRecipes } from '../js/data.js';
 import { createFictionalExternalRecipeSource } from '../js/fictional-external-recipe-source.js';
-import { FICTIONAL_RECIPE_PREVIEWS } from '../js/recipe-previews.js';
+import { FICTIONAL_RECIPE_PREVIEWS } from './fixtures/fictional-recipe-previews.mjs';
 import {
   ADMIN_PREVIEW_OUTPUT_FILES,
   PRODUCTION_OUTPUT_FILES,
 } from '../scripts/build-vercel-static.mjs';
 
 const sql = await readFile(
+  new URL('../supabase/testing-migrations/202611230002_recipe_detail_seed_data.sql', import.meta.url),
+  'utf8',
+);
+const productionSql = await readFile(
   new URL('../supabase/migrations/202611230002_recipe_detail_seed_data.sql', import.meta.url),
   'utf8',
 );
+const productionPayloadMatch = productionSql.match(/expected\s+jsonb\s*:=\s*\$recipes\$([\s\S]*?)\$recipes\$::jsonb/i);
+assert.ok(productionPayloadMatch, 'Production requires an explicit recipe inventory.');
+const productionRecipes = JSON.parse(productionPayloadMatch[1]);
+assert.equal(productionRecipes.length, 10);
+assert.deepEqual(productionRecipes.map(({ id }) => id), builtInRecipes.map(({ id }) => id));
+assert.ok(productionRecipes.every(({ source_type, external_provider, external_id }) =>
+  source_type === 'seed' && external_provider === null && external_id === null));
+assert.doesNotMatch(productionPayloadMatch[1], /fictional-offline|99000[1-6]/i);
+assert.match(productionSql, /jsonb_array_length\(expected\)\s*<>\s*10/i);
+assert.match(productionSql, /raise exception 'Fictional test recipes already exist/i);
+assert.match(productionSql, /raise exception 'Production recipe provenance is invalid'/i);
+assert.match(productionSql, /where\s+not\s+exists\s*\(\s*select\s+1\s+from\s+public\.recipes\s+where\s+id\s*=\s*target->>'id'/i);
+assert.match(productionSql, /raise exception 'Existing recipe conflicts with intended data/i);
+assert.doesNotMatch(productionSql, /\bon\s+conflict\s+do\s+update\b|\bdelete\s+from\b|\btruncate\b/i);
+assert.match(productionSql, /^(?:--[^\n]*\n)*begin;[\s\S]*commit;\s*$/i);
+assert.equal((productionSql.match(/^begin;$/gm) ?? []).length, 1);
+assert.equal((productionSql.match(/^commit;$/gm) ?? []).length, 1);
+assert.match(productionSql, /lock\s+table\s+public\.recipes\s+in\s+share\s+row\s+exclusive\s+mode/i);
+assert.match(productionSql, /where\s+not\s+exists\s*\(\s*select\s+1\s+from\s+public\.recipes\s+where\s+id\s*=\s*target->>'id'/i);
+for (const field of [
+  'name', 'description', 'category_id', 'cuisine_id', 'image_url', 'fallback_image_url',
+  'tutorial_url', 'ingredients', 'instructions', 'status', 'source_type',
+  'external_provider', 'external_id', 'published_at',
+]) {
+  assert.match(productionSql, new RegExp(`existing_row\\.${field}\\s+is\\s+distinct\\s+from`, 'i'),
+    `A changed existing ${field} must abort the transaction.`);
+}
+assert.match(productionSql, /existing_row\.created_by\s+is\s+not\s+null/i);
+assert.equal((productionSql.match(/\binsert\s+into\s+public\.recipes\b/gi) ?? []).length, 1);
 const payloadMatch = sql.match(/expected\s+jsonb\s*:=\s*\$recipes\$([\s\S]*?)\$recipes\$::jsonb/i);
 assert.ok(payloadMatch, 'The migration must contain one explicit JSONB recipe inventory.');
 const actual = JSON.parse(payloadMatch[1]);
+assert.deepEqual(productionRecipes, actual.slice(0, 10),
+  'Production must preserve the original ten seed payloads exactly.');
 
 const format = (recipe, sourceType, externalId = null) => ({
   id: recipe.id,

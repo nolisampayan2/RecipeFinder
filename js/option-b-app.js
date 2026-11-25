@@ -1,4 +1,4 @@
-import { BUILT_IN_RECIPE_PREVIEWS, FICTIONAL_RECIPE_PREVIEWS } from './recipe-previews.js';
+import { BUILT_IN_RECIPE_PREVIEWS } from './recipe-previews.js';
 import { createRecipePreviewSession } from './recipe-preview-session.js';
 import { createPublishedRecipePreviewService } from './supabase-recipe-previews.js';
 import { createAuthenticatedRecipeDetailService } from './supabase-recipe-details.js';
@@ -225,7 +225,6 @@ function card(recipe) {
     || (source === 'online' && favoriteState.mode !== 'guest');
   const copy = node('div', 'card-body');
   if (recipe.externalProvider === 'themealdb') copy.append(node('span', 'recipe-source', 'TheMealDB recipe'));
-  else if (recipe.externalProvider === 'fictional-offline') copy.append(node('span', 'recipe-source', 'Fictional offline preview'));
   const tags = node('div', 'tags');
   tags.append(node('span', 'tag', recipe.category), node('span', 'tag alt', recipe.cuisine));
   const action = node('button', 'view-btn', 'View Recipe');
@@ -490,11 +489,8 @@ function chooseOfflineFilter(nextFilter) {
 }
 
 async function openOwned(id, trigger) {
-  const fictional = /^external:fictional-offline:(\d+)$/.exec(id);
-  const recipe = owned.get(id) ?? (fictional
-    ? { id, source: 'external', detailLevel: 'summary', externalProvider: 'fictional-offline', externalId: fictional[1] }
-    : /^[a-z0-9][a-z0-9:_-]{0,199}$/.test(id) && !id.startsWith('external:')
-      ? { id, source: 'database', detailLevel: 'preview' } : null);
+  const recipe = owned.get(id) ?? (/^[a-z0-9][a-z0-9:_-]{0,199}$/.test(id) && !id.startsWith('external:')
+    ? { id, source: 'database', detailLevel: 'preview' } : null);
   if (!recipe || !previewSession) return;
   const generation = ++detailGeneration;
   const request = previewSession.requestRecipeFinderPreviewDetail(recipe, trigger);
@@ -572,7 +568,7 @@ function onClientReady(client, availability) {
   if (retired || previewSession) return;
   const gate = createRecipeLoginGate({ documentLike: document, present: modal.present, dismiss: modal.close });
   previewSession = createRecipePreviewSession({
-    builtInPreviews: BUILT_IN_RECIPE_PREVIEWS, fictionalPreviews: FICTIONAL_RECIPE_PREVIEWS,
+    builtInPreviews: BUILT_IN_RECIPE_PREVIEWS, fictionalPreviews: [],
     previewSource: createPublishedRecipePreviewService(client),
     detailService: createAuthenticatedRecipeDetailService(client),
     loginGate: gate, clearProtectedDetail: () => modal.close({ restoreFocus: false }),

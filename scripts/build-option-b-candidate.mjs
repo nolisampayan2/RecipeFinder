@@ -16,6 +16,7 @@ const FORBIDDEN = new Set([
   'app.js', 'js/data.js', 'js/fictional-external-recipe-source.js',
   'js/recipe-catalog.js', 'js/recipe-catalog-composition.js',
   'js/dashboard-recipe-catalog-loader.js', 'js/filters.js', 'js/render.js', 'js/modal.js',
+  'js/supabase-recipe-source.js',
 ]);
 const ROOT_ENTRY = 'js/option-b-app.js';
 const AUTH_ENTRIES = Object.freeze([

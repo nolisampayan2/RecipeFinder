@@ -8,7 +8,7 @@ import {
 } from '../scripts/build-vercel-static.mjs';
 
 const migration = await readFile(
-  new URL('../supabase/migrations/202611230002_recipe_detail_seed_data.sql', import.meta.url),
+  new URL('../supabase/testing-migrations/202611230002_recipe_detail_seed_data.sql', import.meta.url),
   'utf8',
 );
 const runbook = await readFile(new URL('../supabase/README.md', import.meta.url), 'utf8');

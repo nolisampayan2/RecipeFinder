@@ -11,6 +11,7 @@ const publicConfig = Object.freeze({
 });
 const forbiddenPaths = [
   'app.js', 'js/data.js', 'js/fictional-external-recipe-source.js',
+  'js/supabase-recipe-source.js',
   'js/recipe-catalog.js', 'js/recipe-catalog-composition.js',
   'js/dashboard-recipe-catalog-loader.js', 'js/filters.js', 'js/render.js', 'js/modal.js',
 ];

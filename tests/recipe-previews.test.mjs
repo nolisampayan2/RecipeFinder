@@ -9,10 +9,8 @@ import {
   ADMIN_PREVIEW_OUTPUT_FILES,
   PRODUCTION_OUTPUT_FILES,
 } from '../scripts/build-vercel-static.mjs';
-import {
-  BUILT_IN_RECIPE_PREVIEWS,
-  FICTIONAL_RECIPE_PREVIEWS,
-} from '../js/recipe-previews.js';
+import { BUILT_IN_RECIPE_PREVIEWS } from '../js/recipe-previews.js';
+import { FICTIONAL_RECIPE_PREVIEWS } from './fixtures/fictional-recipe-previews.mjs';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const modulePath = 'js/recipe-previews.js';
