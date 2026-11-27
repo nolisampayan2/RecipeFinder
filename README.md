@@ -4,14 +4,6 @@ RecipeFinder is a web application for discovering, viewing, and organizing recip
 
 **Live website:** https://recipefinder-pi-ebon.vercel.app/
 
-**Academic project:** Pateros Technological College · Bachelor of Science in Information Technology (BSIT) · Integrative Programming and Technologies
-
-**Group members:**
-
-- [Member name]
-- [Member name]
-- [Member name]
-
 ## Implemented features
 
 - **Recipe discovery:** Search and browse RecipeFinder recipes by category and cuisine.
